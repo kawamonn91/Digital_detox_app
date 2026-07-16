@@ -5,7 +5,7 @@
 
 import React, { useEffect } from 'react';
 import { StatusBar, Platform } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import notifee, { AndroidImportance, TriggerType } from '@notifee/react-native';
@@ -45,8 +45,9 @@ export default function App() {
       />
       <NavigationContainer
         theme={{
-          dark: true,
+          ...DarkTheme,
           colors: {
+            ...DarkTheme.colors,
             primary: COLORS.purple400,
             background: COLORS.bgPrimary,
             card: COLORS.bgSecondary,
