@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect } from 'react';
-import { StatusBar, Platform } from 'react-native';
+import { StatusBar, Platform, Text } from 'react-native';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -59,37 +59,43 @@ export default function App() {
       >
         <Tab.Navigator
           screenOptions={({ route }) => ({
-            tabBarIcon: ({ focused }) => {
+            tabBarIcon: () => {
               const icons: Record<string, string> = {
-                Dashboard: focused ? '🏠' : '🏡',
-                Running:   focused ? '🏃' : '👟',
-                AI:        focused ? '🤖' : '✨',
-                Settings:  focused ? '⚙️' : '🔧',
+                Dashboard: '🏠',
+                Running:   '🏃',
+                AI:        '✨',
+                Settings:  '⚙️',
               };
-              return null; // アイコンはtabBarLabelで絵文字を使う
+              return <Text style={{ fontSize: 20 }}>{icons[route.name]}</Text>;
             },
             tabBarLabel: ({ focused }) => {
               const labels: Record<string, string> = {
-                Dashboard: '🏠 ホーム',
-                Running:   '🏃 ランニング',
-                AI:        '✨ AI提案',
-                Settings:  '⚙️ 設定',
+                Dashboard: 'ホーム',
+                Running:   'ランニング',
+                AI:        'AI提案',
+                Settings:  '設定',
               };
-              return labels[route.name] || route.name;
+              return (
+                <Text style={{
+                  fontSize: 10,
+                  fontWeight: focused ? '700' : '400',
+                  color: focused ? COLORS.purple400 : COLORS.textMuted,
+                  marginBottom: 2,
+                }}>
+                  {labels[route.name]}
+                </Text>
+              );
             },
             tabBarStyle: {
-              backgroundColor: 'rgba(10,10,26,0.95)',
-              borderTopColor: 'rgba(255,255,255,0.08)',
+              backgroundColor: '#0f0f2e',
+              borderTopColor: 'rgba(255,255,255,0.1)',
               borderTopWidth: 1,
-              height: 68,
-              paddingBottom: Platform.OS === 'ios' ? 16 : 8,
+              height: Platform.OS === 'ios' ? 88 : 64,
+              paddingTop: 6,
+              paddingBottom: Platform.OS === 'ios' ? 28 : 8,
             },
             tabBarActiveTintColor: COLORS.purple400,
             tabBarInactiveTintColor: COLORS.textMuted,
-            tabBarLabelStyle: {
-              fontSize: 10,
-              fontWeight: '600',
-            },
             headerStyle: {
               backgroundColor: COLORS.bgPrimary,
               borderBottomColor: 'rgba(255,255,255,0.08)',
@@ -100,7 +106,6 @@ export default function App() {
               fontSize: 16,
               fontWeight: '700',
             },
-            headerRight: () => null,
           })}
         >
           <Tab.Screen
