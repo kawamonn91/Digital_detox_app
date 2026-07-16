@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">DebtRunApp</string>
+    <string name="accessibility_service_description">スマホの総スクロール距離を計測するためにアクセシビリティ権限を使用します。</string>
+</resources>
