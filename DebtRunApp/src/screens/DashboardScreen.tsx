@@ -243,7 +243,10 @@ export default function DashboardScreen() {
               onPress={() => Alert.alert(
                 'アクセシビリティ許可が必要です',
                 '設定 → アクセシビリティ → DebtRun → オン にすることでスクロール計測が始まります。',
-                [{ text: 'OK' }]
+                [
+                  { text: 'キャンセル', style: 'cancel' },
+                  { text: '設定を開く', onPress: () => ScrollTracker?.openAccessibilitySettings() }
+                ]
               )}
             >
               <Text style={styles.emptyText}>

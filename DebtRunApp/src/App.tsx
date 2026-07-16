@@ -90,9 +90,8 @@ export default function App() {
               backgroundColor: '#0f0f2e',
               borderTopColor: 'rgba(255,255,255,0.1)',
               borderTopWidth: 1,
-              height: Platform.OS === 'ios' ? 88 : 64,
               paddingTop: 6,
-              paddingBottom: Platform.OS === 'ios' ? 28 : 8,
+              // height と paddingBottom は指定せず、React NavigationのSafeArea自動調整に任せる
             },
             tabBarActiveTintColor: COLORS.purple400,
             tabBarInactiveTintColor: COLORS.textMuted,
