@@ -79,11 +79,18 @@ android {
 
     namespace "com.debtrunapp"
     defaultConfig {
-        applicationId "com.debtrunapp"
+        // T-tech Store 配布用のID(コード上のパッケージ名 namespace は変えない)
+        applicationId "com.ttech.debtrun"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
-        versionName "1.0"
+        versionName "1.0.0"
+    }
+    // リリース署名。keystore.properties(gitignore対象)が無い環境ではデバッグ署名のままビルドが通る。
+    def releaseProps = new Properties()
+    def releasePropsFile = file('keystore.properties')
+    if (releasePropsFile.exists()) {
+        releasePropsFile.withInputStream { releaseProps.load(it) }
     }
     signingConfigs {
         debug {
@@ -92,15 +99,21 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        if (releasePropsFile.exists()) {
+            release {
+                storeFile file(releaseProps.getProperty('storeFile'))
+                storePassword releaseProps.getProperty('storePassword')
+                keyAlias releaseProps.getProperty('keyAlias')
+                keyPassword releaseProps.getProperty('keyPassword')
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            signingConfig releasePropsFile.exists() ? signingConfigs.release : signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }

@@ -8,7 +8,7 @@
     android:accessibilityEventTypes="typeViewScrolled"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagDefault"
-    android:canRetrieveWindowContent="true"
+    android:canRetrieveWindowContent="false"
     android:description="@string/accessibility_service_description"
     android:notificationTimeout="100"
     android:packageNames="com.instagram.android,com.instagram.barcelona,com.twitter.android,com.zhiliaoapp.musically,com.ss.android.ugc.trill,com.google.android.youtube,com.facebook.katana,com.reddit.frontpage,com.pinterest,com.snapchat.android" />
