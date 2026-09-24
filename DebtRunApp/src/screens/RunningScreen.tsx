@@ -1,183 +1,157 @@
 /**
  * RunningScreen.tsx
- * GPSランニングトラッカー画面
+ * GPSランニング計測。走った距離がそのままスクロール負債の返済になる。
+ * 計測中は前面サービス(常駐通知)を出すので、画面を消しても計測が続く。
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity,
-  Alert, Vibration, ScrollView,
+  View, Text, StyleSheet, TouchableOpacity, Alert, Vibration, ScrollView, PermissionsAndroid, Platform,
 } from 'react-native';
 import Geolocation from 'react-native-geolocation-service';
 import LinearGradient from 'react-native-linear-gradient';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { useAppStore } from '../store/useAppStore';
-import { saveRunRecord, formatDistance, formatDuration } from '../services/storageService';
+import { deleteRun, getRecentRuns, saveRunRecord, SavedRun } from '../services/storageService';
+import { startRunForeground, stopRunForeground, updateRunForeground } from '../services/runForeground';
+import { formatDistance, formatDuration, formatPace } from '../domain/format';
+import { MAX_ACCURACY_METERS, paceMinPerKm, runCalories, segmentDistance } from '../domain/running';
 import { COLORS, FONTS, RADIUS } from '../theme';
+
+/** これより短いランニングは記録しない(m) */
+const MIN_RUN_METERS = 10;
+/** 常駐通知の距離表示を更新する間隔(ms) */
+const NOTIFICATION_UPDATE_MS = 10_000;
 
 interface RunState {
   isRunning: boolean;
-  elapsed: number;       // 秒
+  elapsed: number;
   totalMeters: number;
-  pace: number;          // 分/km
-  speed: number;         // km/h
-  calories: number;
-  positions: Array<{ lat: number; lon: number }>;
 }
 
 export default function RunningScreen() {
-  const insets = useSafeAreaInsets();
-  const { netDebtMeters, settings, refreshTodayRun, setIsRunning } = useAppStore();
+  const { dashboard, settings, refreshData, setIsRunning } = useAppStore();
+  const debtMeters = dashboard.debtMeters;
 
-  const [run, setRun] = useState<RunState>({
-    isRunning: false, elapsed: 0, totalMeters: 0,
-    pace: 0, speed: 0, calories: 0, positions: [],
-  });
+  const [run, setRun] = useState<RunState>({ isRunning: false, elapsed: 0, totalMeters: 0 });
+  const [recentRuns, setRecentRuns] = useState<SavedRun[]>([]);
 
-  const startTimeRef  = useRef<number>(0);
-  const timerRef      = useRef<NodeJS.Timeout | null>(null);
-  const watchIdRef    = useRef<number | null>(null);
-  const lastPosRef    = useRef<{ lat: number; lon: number; time: number } | null>(null);
+  const startTimeRef = useRef(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const watchIdRef = useRef<number | null>(null);
+  const lastPosRef = useRef<{ lat: number; lon: number; time: number } | null>(null);
   const totalMetersRef = useRef(0);
-  const positionsRef  = useRef<Array<{ lat: number; lon: number }>>([]);
+  const lastNotificationAtRef = useRef(0);
 
-  // 後払い返済プレビュー
-  const debtRepayPreview = run.totalMeters;
-  const remainingAfter  = Math.max(0, netDebtMeters - debtRepayPreview);
+  const loadRecentRuns = useCallback(() => {
+    getRecentRuns(5).then(setRecentRuns).catch(() => {});
+  }, []);
+  useFocusEffect(loadRecentRuns);
 
-  useEffect(() => {
-    return () => {
-      // アンマウント時クリーンアップ
-      if (timerRef.current)  clearInterval(timerRef.current);
-      if (watchIdRef.current !== null) Geolocation.clearWatch(watchIdRef.current);
-    };
+  const stopTracking = useCallback(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = null;
+    if (watchIdRef.current !== null) Geolocation.clearWatch(watchIdRef.current);
+    watchIdRef.current = null;
+    stopRunForeground().catch(() => {});
   }, []);
 
-  const requestLocationPermission = async (): Promise<boolean> => {
-    try {
-      const { check, request, PERMISSIONS, RESULTS } = require('react-native-permissions');
-      const result = await check(PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION);
-      if (result === RESULTS.GRANTED) return true;
-      const granted = await request(PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION);
-      return granted === RESULTS.GRANTED;
-    } catch {
-      return false;
-    }
-  };
+  // 画面を離れても計測は続けるが、アプリ自体が終了する(アンマウント)ときは後片付けする
+  useEffect(() => stopTracking, [stopTracking]);
+
+  const elapsedSeconds = run.elapsed;
+  const pace = paceMinPerKm(run.totalMeters, elapsedSeconds);
+  const speedKmh = elapsedSeconds > 0 ? (run.totalMeters / elapsedSeconds) * 3.6 : 0;
+  const calories = runCalories(run.totalMeters, settings.weightKg);
+  const remainingAfter = Math.max(0, debtMeters - run.totalMeters);
 
   const startRun = async () => {
-    const granted = await requestLocationPermission();
-    if (!granted) {
+    if (!(await requestLocationPermission())) {
       Alert.alert('位置情報が必要です', 'ランニング計測のために位置情報へのアクセスを許可してください。');
       return;
     }
 
     Vibration.vibrate(100);
-    startTimeRef.current  = Date.now();
+    startTimeRef.current = Date.now();
     totalMetersRef.current = 0;
-    positionsRef.current  = [];
-    lastPosRef.current    = null;
-
-    setRun(prev => ({ ...prev, isRunning: true, elapsed: 0, totalMeters: 0, pace: 0, speed: 0, calories: 0 }));
+    lastPosRef.current = null;
+    lastNotificationAtRef.current = Date.now();
+    setRun({ isRunning: true, elapsed: 0, totalMeters: 0 });
     setIsRunning(true);
 
-    // GPS監視
+    try {
+      await startRunForeground();
+    } catch (e) {
+      // 通知が許可されていないなどで前面サービスを出せなくても、画面を開いている間の計測はできる
+      console.warn('[Running] foreground service failed:', e);
+    }
+
     watchIdRef.current = Geolocation.watchPosition(
-      (position) => {
+      position => {
         const { latitude, longitude, accuracy } = position.coords;
-        if (accuracy > 40) return; // 精度が低い場合は無視
-
-        const newPos = { lat: latitude, lon: longitude };
-        const now = Date.now();
-
-        if (lastPosRef.current) {
-          const dist = haversine(lastPosRef.current, newPos);
-          const elapsed = (now - lastPosRef.current.time) / 1000;
-          const instSpeed = elapsed > 0 ? dist / elapsed : 0; // m/s
-
-          // 瞬間速度が 20m/s 以下（GPSジャンプ除外）
-          if (instSpeed < 20) {
-            totalMetersRef.current += dist;
-            positionsRef.current.push(newPos);
-          }
+        const next = { lat: latitude, lon: longitude, time: Date.now(), accuracy };
+        totalMetersRef.current += segmentDistance(lastPosRef.current, next);
+        if (accuracy <= MAX_ACCURACY_METERS) lastPosRef.current = { lat: latitude, lon: longitude, time: next.time };
+        setRun(prev => ({ ...prev, totalMeters: totalMetersRef.current }));
+        // 常駐通知の距離を更新する。画面を消している間は JS のタイマーが止まるため、測位のたびに間隔を見て更新する
+        if (next.time - lastNotificationAtRef.current >= NOTIFICATION_UPDATE_MS) {
+          lastNotificationAtRef.current = next.time;
+          updateRunForeground(totalMetersRef.current, (next.time - startTimeRef.current) / 1000).catch(() => {});
         }
-
-        lastPosRef.current = { ...newPos, time: now };
-
-        const totalElapsed = (now - startTimeRef.current) / 1000;
-        const paceMinKm = totalMetersRef.current > 100
-          ? (totalElapsed / 60) / (totalMetersRef.current / 1000)
-          : 0;
-        const speedKmh = totalElapsed > 0
-          ? (totalMetersRef.current / totalElapsed) * 3.6
-          : 0;
-        const calories = calcCalories(totalMetersRef.current, settings.weightKg);
-
-        setRun(prev => ({
-          ...prev,
-          totalMeters: totalMetersRef.current,
-          pace: paceMinKm,
-          speed: speedKmh,
-          calories,
-        }));
       },
-      (error) => {
-        console.warn('GPS Error:', error.message);
-        Alert.alert('GPS エラー', 'GPS信号を取得できません。屋外で試してください。');
-      },
-      { enableHighAccuracy: true, distanceFilter: 5, interval: 2000, fastestInterval: 1000 }
+      error => console.warn('GPS Error:', error.message),
+      { enableHighAccuracy: true, distanceFilter: 5, interval: 2000, fastestInterval: 1000 },
     );
 
-    // タイマー
+    // 経過時間の表示(画面を開いている間だけ動けばよい。時間そのものは開始時刻から計算する)
     timerRef.current = setInterval(() => {
-      setRun(prev => ({
-        ...prev,
-        elapsed: Math.floor((Date.now() - startTimeRef.current) / 1000),
-      }));
+      setRun(prev => ({ ...prev, elapsed: Math.floor((Date.now() - startTimeRef.current) / 1000) }));
     }, 1000);
   };
 
   const stopRun = async () => {
-    if (!run.isRunning) return;
     Vibration.vibrate([100, 50, 100]);
+    stopTracking();
 
-    if (timerRef.current)  clearInterval(timerRef.current);
-    if (watchIdRef.current !== null) Geolocation.clearWatch(watchIdRef.current);
-
-    const finalMeters   = totalMetersRef.current;
-    const finalElapsed  = Math.floor((Date.now() - startTimeRef.current) / 1000);
-    const finalPace     = finalMeters > 100 ? (finalElapsed / 60) / (finalMeters / 1000) : 0;
-    const finalCalories = calcCalories(finalMeters, settings.weightKg);
-
+    const meters = Math.round(totalMetersRef.current);
+    const durationS = Math.floor((Date.now() - startTimeRef.current) / 1000);
     setIsRunning(false);
     setRun(prev => ({ ...prev, isRunning: false }));
 
-    if (finalMeters > 10) {
-      await saveRunRecord({
-        meters: Math.round(finalMeters),
-        durationS: finalElapsed,
-        paceMinKm: finalPace,
-        calories: finalCalories,
-        simMode: false,
-      });
-      await refreshTodayRun();
-
-      Alert.alert(
-        '🏁 ランニング完了！',
-        `距離: ${formatDistance(finalMeters)}\n時間: ${formatDuration(finalElapsed)}\nペース: ${formatPace(finalPace)}\nカロリー: ${Math.round(finalCalories)} kcal\n\n負債を ${formatDistance(finalMeters)} 返済しました！`,
-        [{ text: 'OK' }]
-      );
-    } else {
-      Alert.alert('短すぎます', '10m以上走ってください。');
+    if (meters < MIN_RUN_METERS) {
+      Alert.alert('記録しませんでした', `${MIN_RUN_METERS}m以上走ると記録されます。屋外で試してください。`);
+      return;
     }
+    const finalPace = paceMinPerKm(meters, durationS);
+    await saveRunRecord(
+      { meters, durationS, paceMinKm: finalPace, calories: runCalories(meters, settings.weightKg) },
+      startTimeRef.current,
+    );
+    await refreshData();
+    loadRecentRuns();
+    Alert.alert(
+      '🏁 ランニング完了!',
+      `距離: ${formatDistance(meters)}\n時間: ${formatDuration(durationS)}\nペース: ${formatPace(finalPace)}/km\n\n負債を ${formatDistance(meters)} 返済しました!`,
+    );
+  };
+
+  const confirmDelete = (r: SavedRun) => {
+    Alert.alert('記録を削除', `${r.date} の ${formatDistance(r.meters)} の記録を削除しますか?(負債が戻ります)`, [
+      { text: 'キャンセル', style: 'cancel' },
+      {
+        text: '削除',
+        style: 'destructive',
+        onPress: async () => {
+          await deleteRun(r.id);
+          await refreshData();
+          loadRecentRuns();
+        },
+      },
+    ]);
   };
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={{ paddingBottom: 100 }}
-      showsVerticalScrollIndicator={false}
-    >
+    <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
       {/* ── ランニングカード ── */}
       <LinearGradient
         colors={run.isRunning
@@ -188,79 +162,80 @@ export default function RunningScreen() {
         end={{ x: 1, y: 1 }}
       >
         <Text style={styles.runIcon}>{run.isRunning ? '🏃' : '👟'}</Text>
-
         <Text style={styles.timer}>{formatDuration(run.elapsed)}</Text>
-
-        <Text style={styles.distanceBig}>
-          {formatDistance(run.totalMeters)}
-        </Text>
-
-        {run.isRunning && (
-          <Text style={styles.statusText}>GPS計測中...</Text>
-        )}
+        <Text style={styles.distanceBig}>{formatDistance(run.totalMeters)}</Text>
+        {run.isRunning && <Text style={styles.statusText}>GPS計測中(画面を消しても計測を続けます)</Text>}
       </LinearGradient>
 
       {/* ── メトリクス ── */}
       <View style={styles.metricsRow}>
-        <MetricCard label="ペース" value={formatPace(run.pace)} unit="分/km" />
-        <MetricCard label="速度" value={run.speed.toFixed(1)} unit="km/h" />
-        <MetricCard label="カロリー" value={Math.round(run.calories).toString()} unit="kcal" />
+        <MetricCard label="ペース" value={formatPace(pace)} unit="分/km" />
+        <MetricCard label="速度" value={speedKmh.toFixed(1)} unit="km/h" />
+        <MetricCard label="カロリー" value={Math.round(calories).toString()} unit="kcal" />
       </View>
 
       {/* ── 負債返済プレビュー ── */}
       <View style={styles.debtPreview}>
         <Text style={styles.previewIcon}>⚡</Text>
         <View style={{ flex: 1 }}>
-          <Text style={styles.previewLabel}>返済中の負債</Text>
+          <Text style={styles.previewLabel}>このランニングで返済</Text>
           <Text style={styles.previewValue}>
-            {formatDistance(debtRepayPreview)}
+            {formatDistance(run.totalMeters)}
             <Text style={styles.previewRemain}> → 残 {formatDistance(remainingAfter)}</Text>
           </Text>
         </View>
       </View>
 
-      {/* ── スタート/ストップボタン ── */}
-      <TouchableOpacity
-        style={[styles.ctaBtn, run.isRunning && styles.ctaBtnStop]}
-        onPress={run.isRunning ? stopRun : startRun}
-        activeOpacity={0.85}
-      >
+      {/* ── スタート/ストップ ── */}
+      <TouchableOpacity style={styles.ctaBtn} onPress={run.isRunning ? stopRun : startRun} activeOpacity={0.85}>
         <LinearGradient
-          colors={run.isRunning
-            ? [COLORS.red400, '#f97316']
-            : [COLORS.purple600, COLORS.blue500]}
+          colors={run.isRunning ? [COLORS.red400, '#f97316'] : [COLORS.purple600, COLORS.blue500]}
           style={styles.ctaBtnGrad}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 0 }}
         >
-          <Text style={styles.ctaBtnText}>
-            {run.isRunning ? '⏹ ストップ' : '▶ ランニング開始'}
-          </Text>
+          <Text style={styles.ctaBtnText}>{run.isRunning ? '⏹ ストップ' : '▶ ランニング開始'}</Text>
         </LinearGradient>
       </TouchableOpacity>
 
-      {/* ── 今日の目標 ── */}
+      {/* ── 目標 ── */}
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>🎯 今日の目標</Text>
+        <Text style={styles.cardTitle}>🎯 返済目標</Text>
         <Text style={styles.goalText}>
-          残負債 <Text style={{ color: COLORS.red400, fontWeight: '700' }}>
-            {formatDistance(netDebtMeters)}
-          </Text> を返済するために走ろう！
+          {debtMeters > 0 ? (
+            <>
+              残負債 <Text style={{ color: COLORS.red400, fontWeight: '700' }}>{formatDistance(debtMeters)}</Text> を返済するために走ろう!
+            </>
+          ) : (
+            '負債はありません。走った分は今日のスクロールへの備えになります'
+          )}
         </Text>
         <View style={styles.progressTrack}>
           <View
-            style={[
-              styles.progressFill,
-              { width: `${Math.min(100, (run.totalMeters / Math.max(netDebtMeters, 1)) * 100)}%` }
-            ]}
+            style={[styles.progressFill, { width: `${debtMeters > 0 ? Math.min(100, (run.totalMeters / debtMeters) * 100) : 100}%` }]}
           />
         </View>
       </View>
+
+      {/* ── 最近の記録 ── */}
+      {recentRuns.length > 0 && (
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>📝 最近のランニング</Text>
+          {recentRuns.map(r => (
+            <TouchableOpacity key={r.id} style={styles.historyRow} onLongPress={() => confirmDelete(r)}>
+              <Text style={styles.historyDate}>{r.date}</Text>
+              <Text style={styles.historyValue}>{formatDistance(r.meters)}</Text>
+              <Text style={styles.historySub}>{formatDuration(r.durationS)} ・ {formatPace(r.paceMinKm)}/km</Text>
+            </TouchableOpacity>
+          ))}
+          <Text style={styles.historyHint}>長押しで記録を削除できます</Text>
+        </View>
+      )}
     </ScrollView>
   );
 }
 
-function MetricCard({ label, value, unit }: any) {
+function MetricCard({ label, value, unit }: { label: string; value: string; unit: string }) {
   return (
     <View style={styles.metricCard}>
       <Text style={styles.metricValue}>{value}</Text>
@@ -270,29 +245,13 @@ function MetricCard({ label, value, unit }: any) {
   );
 }
 
-// ── 計算ユーティリティ ──
-
-function haversine(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
-  const R = 6371000;
-  const dLat = (b.lat - a.lat) * Math.PI / 180;
-  const dLon = (b.lon - a.lon) * Math.PI / 180;
-  const lat1 = a.lat * Math.PI / 180;
-  const lat2 = b.lat * Math.PI / 180;
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.asin(Math.sqrt(h));
-}
-
-function calcCalories(meters: number, weightKg: number): number {
-  // MET法: ランニング MET ≈ 8.0
-  const hours = meters / 1000 / 10; // 10km/h想定
-  return 8.0 * weightKg * hours;
-}
-
-function formatPace(pace: number): string {
-  if (!pace || pace === Infinity || pace <= 0) return '--:--';
-  const m = Math.floor(pace);
-  const s = Math.round((pace - m) * 60);
-  return `${m}:${String(s).padStart(2, '0')}`;
+async function requestLocationPermission(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  const result = await PermissionsAndroid.requestMultiple([
+    PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+    PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+  ]);
+  return result[PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION] === PermissionsAndroid.RESULTS.GRANTED;
 }
 
 const styles = StyleSheet.create({
@@ -377,4 +336,17 @@ const styles = StyleSheet.create({
     borderRadius: 100,
     backgroundColor: COLORS.green400,
   },
+
+  historyRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 10,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.05)',
+  },
+  historyDate: { fontSize: 12, color: COLORS.textMuted, width: 84 },
+  historyValue: { fontSize: 15, fontWeight: '800', color: COLORS.green400, fontFamily: FONTS.grotesk },
+  historySub: { flex: 1, fontSize: 11, color: COLORS.textSecondary, textAlign: 'right' },
+  historyHint: { fontSize: 10, color: COLORS.textMuted, marginTop: 8, textAlign: 'right' },
 });

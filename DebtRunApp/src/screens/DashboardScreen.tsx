@@ -1,99 +1,60 @@
 /**
  * DashboardScreen.tsx
- * メインダッシュボード — スクロール負債 vs ランニング返済
- * v2: タッチ修正、ランニング開始ボタン追加、UI調整パネル追加
+ * メインダッシュボード — スクロール負債(前日からの繰り越し込み) vs ランニング返済
  */
 
-import React, { useEffect, useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  RefreshControl, Animated, Easing, Modal, TextInput, Alert,
-  Switch, Platform,
+  RefreshControl, Modal, TextInput, Alert, AppState,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { NativeModules, NativeEventEmitter } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useAppStore } from '../store/useAppStore';
-import { saveScrollRecord } from '../services/storageService';
+import { scrollTracker, usageStats } from '../services/nativeModules';
+import { formatDistance, formatScreenTime } from '../domain/format';
 import { COLORS, FONTS, RADIUS } from '../theme';
 import DebtRingChart from '../components/DebtRingChart';
 import WeekBarChart from '../components/WeekBarChart';
 import AppUsageRow from '../components/AppUsageRow';
 
-const { ScrollTracker, UsageStats } = NativeModules;
-
 export default function DashboardScreen() {
-  const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
+  const { dashboard, permissions, settings, refreshData, setSettings, openSummary } = useAppStore();
   const {
-    todayScrollScreens, todayScrollMeters, todayRunMeters,
-    netDebtMeters, runStreak, todayScrollByApp,
-    scrollTrend, runTrend, settings,
-    refreshData, refreshScrollData, isLoading, setSettings,
-  } = useAppStore();
+    todayScreens, todayScrollMeters, todayRunMeters, debtMeters, carriedOverMeters,
+    todayRepayRatio, streak, week, apps, screenTimeTodayMs, snsTimeTodayMs,
+  } = dashboard;
 
-  const debtAnim = useRef(new Animated.Value(0)).current;
   const [refreshing, setRefreshing] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [mpsInput, setMpsInput] = useState(String(settings.metersPerScreen));
 
-  // スクロールイベントリスナー登録
-  useEffect(() => {
-    let sub: any;
-    (async () => {
-      try {
-        const isEnabled = await ScrollTracker?.isAccessibilityEnabled();
-        if (!isEnabled) return;
-        const emitter = new NativeEventEmitter(ScrollTracker);
-        sub = emitter.addListener('ScrollTrackerUpdate', async (e: any) => {
-          const screenHeightPx: number = e.screenHeightPx || 1920;
-          const deltaPx: number = e.deltaPx || 0;
-          const deltaScreens = deltaPx / screenHeightPx;
-          const deltaMeters  = deltaScreens * settings.metersPerScreen;
-          if (deltaScreens > 0.001) {
-            await saveScrollRecord({
-              packageName: e.packageName,
-              appName: e.appName,
-              totalPx: deltaPx,
-              screens: deltaScreens,
-              meters: deltaMeters,
-              source: 'auto',
-            });
-            refreshScrollData();
-          }
-        });
-      } catch (e) {
-        console.warn('[Dashboard] Scroll listener error:', e);
-      }
-    })();
-    return () => sub?.remove();
-  }, [settings.metersPerScreen]);
-
+  // スクロールが記録されたら(アプリ起動中のみ)画面を更新する。
+  // 他のアプリや設定画面から戻ってきたときも読み直す(その間の記録はネイティブ側に保存されている)
   useEffect(() => {
     refreshData();
-  }, []);
-
-  // 負債アニメーション
-  useEffect(() => {
-    Animated.timing(debtAnim, {
-      toValue: netDebtMeters,
-      duration: 1000,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: false,
-    }).start();
-  }, [netDebtMeters]);
+    const scrollSub = scrollTracker.onUpdate(() => {
+      // 他のアプリでスクロールしている間(このアプリが背面)は読み直さない。前面に戻ったときにまとめて読む
+      if (AppState.currentState === 'active') refreshData();
+    });
+    const appStateSub = AppState.addEventListener('change', state => {
+      if (state === 'active') refreshData();
+    });
+    return () => {
+      scrollSub.remove();
+      appStateSub.remove();
+    };
+  }, [refreshData]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await refreshData();
     setRefreshing(false);
-  }, []);
+  }, [refreshData]);
 
-  const repayPercent = todayScrollMeters > 0
-    ? Math.min(1, todayRunMeters / todayScrollMeters)
-    : 0;
-  const isBalanced = netDebtMeters === 0 && todayRunMeters > 0;
+  const isBalanced = debtMeters <= 0 && todayRunMeters > 0;
+  const debtIsKm = debtMeters >= 1000;
 
   const saveMps = async () => {
     const val = parseFloat(mpsInput);
@@ -101,7 +62,7 @@ export default function DashboardScreen() {
       Alert.alert('無効な値', '0.1〜100 の範囲で入力してください。');
       return;
     }
-    await setSettings({ metersPerScreen: val });
+    await setSettings({ metersPerScreen: Math.round(val * 10) / 10 });
     setSettingsVisible(false);
   };
 
@@ -112,13 +73,25 @@ export default function DashboardScreen() {
         contentContainerStyle={{ paddingBottom: 120 }}
         showsVerticalScrollIndicator={false}
         refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={COLORS.purple400}
-          />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.purple400} />
         }
       >
+        {/* ── 計測がオフのときの案内 ── */}
+        {!permissions.scrollTracking && (
+          <PermissionBanner
+            title="スクロール計測がオフです"
+            desc="設定 → ユーザー補助(アクセシビリティ) → DebtRun スクロール計測 をオンにすると、SNSや動画アプリのスクロール距離の記録が始まります。"
+            onPress={() => scrollTracker.openSettings()}
+          />
+        )}
+        {!permissions.usageAccess && (
+          <PermissionBanner
+            title="スクリーンタイムを記録しましょう"
+            desc="「使用状況へのアクセス」で DebtRun を許可すると、アプリ別の使用時間も記録します。"
+            onPress={() => usageStats.openSettings()}
+          />
+        )}
+
         {/* ── ヒーロー負債カード ── */}
         <LinearGradient
           colors={isBalanced
@@ -129,45 +102,35 @@ export default function DashboardScreen() {
           end={{ x: 1, y: 1 }}
         >
           <Text style={styles.heroLabel}>スクロール負債</Text>
-
-          <Animated.Text style={[styles.heroValue, isBalanced && styles.heroValueGreen]}>
-            {netDebtMeters >= 1000
-              ? `${(netDebtMeters / 1000).toFixed(2)}`
-              : `${Math.round(netDebtMeters)}`}
-          </Animated.Text>
-          <Text style={styles.heroUnit}>
-            {netDebtMeters >= 1000 ? 'km 残債' : 'm 残債'}
+          <Text style={[styles.heroValue, debtMeters <= 0 && styles.heroValueGreen]}>
+            {debtIsKm ? (debtMeters / 1000).toFixed(2) : Math.round(debtMeters)}
           </Text>
+          <Text style={styles.heroUnit}>{debtIsKm ? 'km 残債' : 'm 残債'}</Text>
 
           {isBalanced && (
             <View style={styles.completedBadge}>
-              <Text style={styles.completedText}>✅ 今日の負債完済！</Text>
+              <Text style={styles.completedText}>✅ 負債完済!</Text>
             </View>
+          )}
+          {carriedOverMeters > 0 && (
+            <Text style={styles.carriedText}>うち前日からの繰り越し {formatDistance(carriedOverMeters)}</Text>
           )}
 
           <View style={styles.heroBreakdown}>
             <View style={styles.breakdownItem}>
-              <Text style={styles.breakdownLabel}>📲 スクロール</Text>
-              <Text style={[styles.breakdownVal, { color: COLORS.red400 }]}>
-                {formatDistance(todayScrollMeters)}
-              </Text>
+              <Text style={styles.breakdownLabel}>📲 今日のスクロール</Text>
+              <Text style={[styles.breakdownVal, { color: COLORS.red400 }]}>{formatDistance(todayScrollMeters)}</Text>
             </View>
             <View style={styles.breakdownDivider} />
             <View style={styles.breakdownItem}>
-              <Text style={styles.breakdownLabel}>🏃 ランニング</Text>
-              <Text style={[styles.breakdownVal, { color: COLORS.green400 }]}>
-                {formatDistance(todayRunMeters)}
-              </Text>
+              <Text style={styles.breakdownLabel}>🏃 今日のランニング</Text>
+              <Text style={[styles.breakdownVal, { color: COLORS.green400 }]}>{formatDistance(todayRunMeters)}</Text>
             </View>
           </View>
         </LinearGradient>
 
-        {/* ── ランニング開始ボタン（ホーム画面） ── */}
-        <TouchableOpacity
-          style={styles.runBtn}
-          activeOpacity={0.82}
-          onPress={() => navigation.navigate('Running')}
-        >
+        {/* ── ランニング開始ボタン ── */}
+        <TouchableOpacity style={styles.runBtn} activeOpacity={0.82} onPress={() => navigation.navigate('Running')}>
           <LinearGradient
             colors={[COLORS.purple600, COLORS.blue500]}
             style={styles.runBtnGrad}
@@ -178,50 +141,49 @@ export default function DashboardScreen() {
           </LinearGradient>
         </TouchableOpacity>
 
-        {/* ── 返済進捗 + リング ── */}
+        {/* ── 今日の返済率 + 統計 ── */}
         <View style={styles.ringRow}>
-          <DebtRingChart
-            percent={repayPercent}
-            screens={todayScrollScreens}
-            meters={todayScrollMeters}
-          />
+          <DebtRingChart percent={todayRepayRatio} screens={todayScreens} />
           <View style={styles.statsRight}>
-            <TouchableOpacity
-              style={styles.statCard}
-              activeOpacity={0.7}
-              onPress={() => navigation.navigate('Running')}
-            >
+            <TouchableOpacity style={styles.statCard} activeOpacity={0.7} onPress={() => navigation.navigate('Running')}>
               <Text style={styles.statIcon}>🔥</Text>
-              <Text style={[styles.statValue, { color: COLORS.orange400 }]}>{runStreak}日</Text>
+              <Text style={[styles.statValue, { color: COLORS.orange400 }]}>{streak}日</Text>
               <Text style={styles.statLabel}>連続ランニング</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.statCard}
               activeOpacity={0.7}
-              onPress={() => setSettingsVisible(true)}
+              onPress={() => (screenTimeTodayMs === null ? usageStats.openSettings() : openSummary())}
             >
-              <Text style={styles.statIcon}>📱</Text>
+              <Text style={styles.statIcon}>⏱️</Text>
               <Text style={[styles.statValue, { color: COLORS.red400 }]}>
-                {todayScrollScreens.toFixed(0)}画面
+                {screenTimeTodayMs === null ? '--' : formatScreenTime(screenTimeTodayMs)}
               </Text>
-              <Text style={styles.statLabel}>本日のスクロール</Text>
+              <Text style={styles.statLabel}>
+                今日のスクリーンタイム{snsTimeTodayMs !== null ? `\n(SNS・動画 ${formatScreenTime(snsTimeTodayMs)})` : ''}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
 
-        {/* ── UI調整ボタン ── */}
-        <TouchableOpacity
-          style={styles.adjustBtn}
-          activeOpacity={0.75}
-          onPress={() => { setMpsInput(String(settings.metersPerScreen)); setSettingsVisible(true); }}
-        >
-          <Text style={styles.adjustBtnText}>⚙️ UI・換算比率を調整する</Text>
-        </TouchableOpacity>
+        {/* ── まとめ・換算比率 ── */}
+        <View style={styles.actionRow}>
+          <TouchableOpacity style={[styles.adjustBtn, { flex: 1 }]} activeOpacity={0.75} onPress={openSummary}>
+            <Text style={styles.adjustBtnText}>📊 今日のまとめ</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.adjustBtn, { flex: 1 }]}
+            activeOpacity={0.75}
+            onPress={() => { setMpsInput(String(settings.metersPerScreen)); setSettingsVisible(true); }}
+          >
+            <Text style={styles.adjustBtnText}>⚙️ 1画面 = {settings.metersPerScreen}m</Text>
+          </TouchableOpacity>
+        </View>
 
         {/* ── 週間グラフ ── */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>週間トレンド</Text>
-          <WeekBarChart scrollData={scrollTrend} runData={runTrend} />
+          <WeekBarChart data={week} />
           <View style={styles.chartLegend}>
             <View style={styles.legendItem}>
               <View style={[styles.legendDot, { backgroundColor: COLORS.red400 }]} />
@@ -234,60 +196,42 @@ export default function DashboardScreen() {
           </View>
         </View>
 
-        {/* ── アプリ別使用状況 ── */}
+        {/* ── アプリ別 ── */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>📱 アプリ別スクロール</Text>
-          {todayScrollByApp.length === 0 ? (
-            <TouchableOpacity
-              activeOpacity={0.7}
-              onPress={() => Alert.alert(
-                'アクセシビリティ許可が必要です',
-                '設定 → アクセシビリティ → DebtRun → オン にすることでスクロール計測が始まります。',
-                [
-                  { text: 'キャンセル', style: 'cancel' },
-                  { text: '設定を開く', onPress: () => ScrollTracker?.openAccessibilitySettings() }
-                ]
-              )}
-            >
-              <Text style={styles.emptyText}>
-                まだデータがありません{'\n'}タップして許可の設定方法を確認
-              </Text>
-            </TouchableOpacity>
+          <Text style={styles.cardTitle}>📱 今日のアプリ別</Text>
+          {apps.length === 0 ? (
+            <Text style={styles.emptyText}>
+              {permissions.scrollTracking
+                ? 'まだ今日の記録がありません'
+                : 'スクロール計測をオンにすると、ここにアプリ別の記録が表示されます'}
+            </Text>
           ) : (
-            todayScrollByApp.map((record, i) => (
-              <AppUsageRow key={i} record={record} />
-            ))
+            apps.map(record => <AppUsageRow key={record.appName} record={record} />)
           )}
         </View>
       </ScrollView>
 
-      {/* ── UI調整モーダル ── */}
+      {/* ── 換算比率・体重の調整 ── */}
       <Modal
         visible={settingsVisible}
         transparent
         animationType="slide"
         onRequestClose={() => setSettingsVisible(false)}
       >
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setSettingsVisible(false)}
-        >
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setSettingsVisible(false)}>
           <TouchableOpacity activeOpacity={1} style={styles.modalSheet}>
             <View style={styles.modalHandle} />
-            <Text style={styles.modalTitle}>⚙️ UI調整</Text>
+            <Text style={styles.modalTitle}>⚙️ 換算比率の調整</Text>
 
-            <Text style={styles.settingLabel}>
-              スクロール1画面あたりの距離（m）
-            </Text>
+            <Text style={styles.settingLabel}>スクロール1画面あたりの距離(m)</Text>
             <Text style={styles.settingNote}>
-              現在: {settings.metersPerScreen}m/画面
-              {'\n'}1.0 = 標準　2.0 = 厳しめ　0.5 = ゆるめ
+              現在: {settings.metersPerScreen}m/画面(過去の記録も新しい比率で計算し直します)
+              {'\n'}1.0 = 標準　2.0 = 厳しめ　0.5 = ゆるめ。「AI提案」でおすすめの値も確認できます
             </Text>
             <View style={styles.inputRow}>
               <TouchableOpacity
                 style={styles.stepBtn}
-                onPress={() => setMpsInput(String(Math.max(0.1, parseFloat(mpsInput || '1') - 0.1).toFixed(1)))}
+                onPress={() => setMpsInput((Math.max(0.1, (parseFloat(mpsInput) || 1) - 0.1)).toFixed(1))}
               >
                 <Text style={styles.stepBtnText}>－</Text>
               </TouchableOpacity>
@@ -300,25 +244,19 @@ export default function DashboardScreen() {
               />
               <TouchableOpacity
                 style={styles.stepBtn}
-                onPress={() => setMpsInput(String(Math.min(100, parseFloat(mpsInput || '1') + 0.1).toFixed(1)))}
+                onPress={() => setMpsInput((Math.min(100, (parseFloat(mpsInput) || 1) + 0.1)).toFixed(1))}
               >
                 <Text style={styles.stepBtnText}>＋</Text>
               </TouchableOpacity>
             </View>
 
-            <Text style={[styles.settingLabel, { marginTop: 20 }]}>体重（カロリー計算用）</Text>
+            <Text style={[styles.settingLabel, { marginTop: 20 }]}>体重(カロリー計算用)</Text>
             <View style={styles.inputRow}>
-              <TouchableOpacity
-                style={styles.stepBtn}
-                onPress={() => setSettings({ weightKg: Math.max(30, settings.weightKg - 1) })}
-              >
+              <TouchableOpacity style={styles.stepBtn} onPress={() => setSettings({ weightKg: Math.max(30, settings.weightKg - 1) })}>
                 <Text style={styles.stepBtnText}>－</Text>
               </TouchableOpacity>
               <Text style={styles.weightDisplay}>{settings.weightKg} kg</Text>
-              <TouchableOpacity
-                style={styles.stepBtn}
-                onPress={() => setSettings({ weightKg: Math.min(200, settings.weightKg + 1) })}
-              >
+              <TouchableOpacity style={styles.stepBtn} onPress={() => setSettings({ weightKg: Math.min(200, settings.weightKg + 1) })}>
                 <Text style={styles.stepBtnText}>＋</Text>
               </TouchableOpacity>
             </View>
@@ -331,7 +269,7 @@ export default function DashboardScreen() {
               style={styles.navToSettings}
               onPress={() => { setSettingsVisible(false); navigation.navigate('Settings'); }}
             >
-              <Text style={styles.navToSettingsText}>📋 全設定（通知・APIキー等）を開く →</Text>
+              <Text style={styles.navToSettingsText}>📋 全設定(通知・APIキー等)を開く →</Text>
             </TouchableOpacity>
           </TouchableOpacity>
         </TouchableOpacity>
@@ -340,8 +278,14 @@ export default function DashboardScreen() {
   );
 }
 
-function formatDistance(m: number) {
-  return m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${Math.round(m)} m`;
+function PermissionBanner({ title, desc, onPress }: { title: string; desc: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={styles.banner} activeOpacity={0.8} onPress={onPress}>
+      <Text style={styles.bannerTitle}>⚠️ {title}</Text>
+      <Text style={styles.bannerDesc}>{desc}</Text>
+      <Text style={styles.bannerAction}>タップして設定を開く →</Text>
+    </TouchableOpacity>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -372,6 +316,22 @@ const styles = StyleSheet.create({
   breakdownDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.07)' },
   breakdownLabel: { fontSize: 11, color: COLORS.textMuted },
   breakdownVal: { fontSize: 18, fontWeight: '800', fontFamily: FONTS.grotesk },
+
+  carriedText: { fontSize: 12, color: COLORS.textSecondary, marginBottom: 12 },
+
+  banner: {
+    backgroundColor: 'rgba(250,204,21,0.08)',
+    borderRadius: RADIUS.md,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(250,204,21,0.3)',
+  },
+  bannerTitle: { color: COLORS.yellow400, fontSize: 14, fontWeight: '800', marginBottom: 4 },
+  bannerDesc: { color: COLORS.textSecondary, fontSize: 12, lineHeight: 18 },
+  bannerAction: { color: COLORS.yellow400, fontSize: 12, fontWeight: '700', marginTop: 6 },
+
+  actionRow: { flexDirection: 'row', gap: 10 },
 
   // ランニング開始ボタン
   runBtn: { marginBottom: 14, borderRadius: RADIUS.lg, overflow: 'hidden' },

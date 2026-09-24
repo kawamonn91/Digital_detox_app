@@ -1,87 +1,84 @@
 package com.debtrunapp
 
+import android.content.ComponentName
 import android.content.Intent
 import android.provider.Settings
-import android.util.Log
-import com.facebook.react.bridge.*
-import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReactContextBaseJavaModule
+import com.facebook.react.bridge.ReactMethod
 
 /**
- * ScrollTrackerNativeModule
- *
- * JS側から ScrollTrackerService の状態を制御するためのブリッジモジュール。
- * - アクセシビリティ許可チェック
- * - 設定画面を開く
- * - セッションデータの読み出し
+ * JS から [ScrollTrackerService] の状態確認と、保存済みスクロール記録([ScrollLog])の読み出しを行う。
  */
 class ScrollTrackerNativeModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
-    companion object {
-        private const val TAG = "ScrollTrackerNM"
-    }
-
     override fun getName() = "ScrollTracker"
 
-    /**
-     * AccessibilityService が有効か確認
-     */
+    /** アクセシビリティサービス(スクロール計測)が有効か */
     @ReactMethod
     fun isAccessibilityEnabled(promise: Promise) {
-        val serviceName = "${reactApplicationContext.packageName}/.ScrollTrackerService"
+        val component = ComponentName(reactApplicationContext, ScrollTrackerService::class.java)
         val enabled = Settings.Secure.getString(
             reactApplicationContext.contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        )?.contains(serviceName) == true
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+        )?.split(':')?.any { ComponentName.unflattenFromString(it) == component } == true
         promise.resolve(enabled)
     }
 
-    /**
-     * アクセシビリティ設定画面を開く
-     */
     @ReactMethod
     fun openAccessibilitySettings(promise: Promise) {
         try {
-            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            }
-            reactApplicationContext.startActivity(intent)
+            reactApplicationContext.startActivity(
+                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
             promise.resolve(true)
         } catch (e: Exception) {
-            promise.reject("ERROR", e.message)
+            promise.reject("ERROR", e.message, e)
         }
     }
 
     /**
-     * セッション中のスクロールデータを取得
-     * @returns { packageName: { totalPx, totalScreens, appName } }
+     * 保存済みのスクロール記録すべて。
+     * @returns { screenHeightPx: number | null, entries: [{ date, packageName, appName, px }] }
      */
     @ReactMethod
-    fun getSessionScrollData(promise: Promise) {
+    fun getScrollLog(promise: Promise) {
         try {
-            val data = ScrollTrackerService.getSessionData()
-            val result = Arguments.createMap()
-
-            data.forEach { (pkg, totalPx) ->
-                val appInfo = Arguments.createMap().apply {
-                    putString("appName", ScrollTrackerService.TARGET_APPS[pkg] ?: pkg)
-                    putDouble("totalPx", totalPx.toDouble())
-                    // 画面数はJS側で計算（設定値を使うため）
-                }
-                result.putMap(pkg, appInfo)
+            val context = reactApplicationContext
+            val entries = Arguments.createArray()
+            ScrollLog.readAll(context).forEach { entry ->
+                entries.pushMap(Arguments.createMap().apply {
+                    putString("date", entry.date)
+                    putString("packageName", entry.packageName)
+                    putString("appName", TrackedApps.nameOf(entry.packageName))
+                    putDouble("px", entry.px.toDouble())
+                })
+            }
+            val result = Arguments.createMap().apply {
+                val height = ScrollLog.screenHeight(context)
+                if (height != null) putDouble("screenHeightPx", height.toDouble()) else putNull("screenHeightPx")
+                putArray("entries", entries)
             }
             promise.resolve(result)
         } catch (e: Exception) {
-            promise.reject("ERROR", e.message)
+            promise.reject("ERROR", e.message, e)
         }
     }
 
-    /**
-     * セッションデータをリセット
-     */
+    // JS の NativeEventEmitter が "ScrollTrackerUpdate" の購読時に呼ぶ(イベントはサービス側から送るので何もしない)
     @ReactMethod
-    fun clearSessionData(promise: Promise) {
-        ScrollTrackerService.clearSession()
+    fun addListener(eventName: String) = Unit
+
+    @ReactMethod
+    fun removeListeners(count: Double) = Unit
+
+    /** スクロール記録をすべて消す(設定画面の「データを消去」用) */
+    @ReactMethod
+    fun clearScrollLog(promise: Promise) {
+        ScrollLog.clear(reactApplicationContext)
         promise.resolve(true)
     }
 }

@@ -1,35 +1,21 @@
 /**
  * storageService.ts
- * SQLite + AsyncStorage によるデータ永続化レイヤー
+ * ランニング記録(SQLite)と設定(AsyncStorage)の保存。
+ * スクロール記録はアクセシビリティサービスがネイティブ側に保存する(nativeModules.ts の scrollTracker)。
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import SQLite, { SQLiteDatabase } from 'react-native-sqlite-storage';
+import { localDateKey } from '../domain/dates';
 
 SQLite.enablePromise(true);
 
 let db: SQLiteDatabase | null = null;
 
-// ── DB 初期化 ──────────────────────────────────────────────────
-
-export async function initDB(): Promise<void> {
-  db = await SQLite.openDatabase({ name: 'debtrun.db', location: 'default' });
-
-  await db.executeSql(`
-    CREATE TABLE IF NOT EXISTS scroll_records (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      date        TEXT    NOT NULL,
-      package_name TEXT   NOT NULL,
-      app_name    TEXT    NOT NULL,
-      total_px    REAL    DEFAULT 0,
-      screens     REAL    DEFAULT 0,
-      meters      REAL    DEFAULT 0,
-      source      TEXT    DEFAULT 'auto',  -- 'auto'|'manual'
-      created_at  INTEGER NOT NULL
-    );
-  `);
-
-  await db.executeSql(`
+async function getDB(): Promise<SQLiteDatabase> {
+  if (db) return db;
+  const opened = await SQLite.openDatabase({ name: 'debtrun.db', location: 'default' });
+  await opened.executeSql(`
     CREATE TABLE IF NOT EXISTS run_records (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       date        TEXT    NOT NULL,
@@ -41,71 +27,13 @@ export async function initDB(): Promise<void> {
       created_at  INTEGER NOT NULL
     );
   `);
-
-  await db.executeSql(`
-    CREATE INDEX IF NOT EXISTS idx_scroll_date ON scroll_records(date);
-    CREATE INDEX IF NOT EXISTS idx_run_date ON run_records(date);
-  `);
+  await opened.executeSql('CREATE INDEX IF NOT EXISTS idx_run_date ON run_records(date);');
+  db = opened;
+  return opened;
 }
 
-// ── スクロール記録 ──────────────────────────────────────────────
-
-export interface ScrollRecord {
-  packageName: string;
-  appName: string;
-  totalPx: number;
-  screens: number;
-  meters: number;
-  source?: 'auto' | 'manual';
-}
-
-export async function saveScrollRecord(record: ScrollRecord): Promise<void> {
-  if (!db) await initDB();
-  const today = getTodayKey();
-  await db!.executeSql(
-    `INSERT INTO scroll_records (date, package_name, app_name, total_px, screens, meters, source, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [today, record.packageName, record.appName, record.totalPx,
-     record.screens, record.meters, record.source || 'auto', Date.now()]
-  );
-}
-
-export async function getTodayScrollRecords(): Promise<ScrollRecord[]> {
-  if (!db) await initDB();
-  const [result] = await db!.executeSql(
-    `SELECT package_name, app_name, SUM(total_px) as total_px, SUM(screens) as screens, SUM(meters) as meters
-     FROM scroll_records WHERE date = ? GROUP BY package_name ORDER BY screens DESC`,
-    [getTodayKey()]
-  );
-  const records: ScrollRecord[] = [];
-  for (let i = 0; i < result.rows.length; i++) {
-    const row = result.rows.item(i);
-    records.push({
-      packageName: row.package_name,
-      appName: row.app_name,
-      totalPx: row.total_px,
-      screens: row.screens,
-      meters: row.meters,
-    });
-  }
-  return records;
-}
-
-export async function getDailyScrollTotals(days: number): Promise<Array<{date: string; screens: number; meters: number}>> {
-  if (!db) await initDB();
-  const [result] = await db!.executeSql(
-    `SELECT date, SUM(screens) as screens, SUM(meters) as meters
-     FROM scroll_records
-     GROUP BY date
-     ORDER BY date DESC
-     LIMIT ?`,
-    [days]
-  );
-  const rows: Array<{date: string; screens: number; meters: number}> = [];
-  for (let i = 0; i < result.rows.length; i++) {
-    rows.push(result.rows.item(i));
-  }
-  return rows.reverse();
+export async function initDB(): Promise<void> {
+  await getDB();
 }
 
 // ── ランニング記録 ──────────────────────────────────────────────
@@ -113,58 +41,71 @@ export async function getDailyScrollTotals(days: number): Promise<Array<{date: s
 export interface RunRecord {
   meters: number;
   durationS: number;
-  paceMinKm?: number;
-  calories?: number;
-  simMode?: boolean;
+  paceMinKm: number;
+  calories: number;
 }
 
-export async function saveRunRecord(record: RunRecord): Promise<void> {
-  if (!db) await initDB();
-  const today = getTodayKey();
-  await db!.executeSql(
+export interface SavedRun extends RunRecord {
+  id: number;
+  date: string;
+  createdAt: number;
+}
+
+/** ランニングを保存する。日付は走り始めた日(端末のローカル日付) */
+export async function saveRunRecord(record: RunRecord, startedAt: number): Promise<void> {
+  const database = await getDB();
+  await database.executeSql(
     `INSERT INTO run_records (date, meters, duration_s, pace_min_km, calories, sim_mode, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [today, record.meters, record.durationS, record.paceMinKm || 0,
-     record.calories || 0, record.simMode ? 1 : 0, Date.now()]
+     VALUES (?, ?, ?, ?, ?, 0, ?)`,
+    [localDateKey(new Date(startedAt)), record.meters, record.durationS, record.paceMinKm, record.calories, Date.now()],
   );
 }
 
-export async function getTodayRunTotal(): Promise<number> {
-  if (!db) await initDB();
-  const [result] = await db!.executeSql(
-    `SELECT SUM(meters) as total FROM run_records WHERE date = ?`,
-    [getTodayKey()]
+/** 日付ごとのランニング距離(全期間) */
+export async function getDailyRunTotals(): Promise<Array<{ date: string; meters: number }>> {
+  const database = await getDB();
+  const [result] = await database.executeSql(
+    'SELECT date, SUM(meters) AS meters FROM run_records GROUP BY date ORDER BY date',
   );
-  return result.rows.item(0)?.total || 0;
-}
-
-export async function getDailyRunTotals(days: number): Promise<Array<{date: string; meters: number}>> {
-  if (!db) await initDB();
-  const [result] = await db!.executeSql(
-    `SELECT date, SUM(meters) as meters FROM run_records GROUP BY date ORDER BY date DESC LIMIT ?`,
-    [days]
-  );
-  const rows: Array<{date: string; meters: number}> = [];
-  for (let i = 0; i < result.rows.length; i++) rows.push(result.rows.item(i));
-  return rows.reverse();
-}
-
-export async function getRunStreak(): Promise<number> {
-  if (!db) await initDB();
-  const [result] = await db!.executeSql(
-    `SELECT DISTINCT date FROM run_records WHERE meters > 0 ORDER BY date DESC LIMIT 30`
-  );
-  let streak = 0;
-  const today = new Date();
+  const rows: Array<{ date: string; meters: number }> = [];
   for (let i = 0; i < result.rows.length; i++) {
-    const d = new Date(result.rows.item(i).date);
-    const expected = new Date(today);
-    expected.setDate(today.getDate() - i);
-    if (d.toISOString().slice(0, 10) === expected.toISOString().slice(0, 10)) {
-      streak++;
-    } else break;
+    const row = result.rows.item(i);
+    rows.push({ date: row.date, meters: row.meters ?? 0 });
   }
-  return streak;
+  return rows;
+}
+
+/** 最近のランニング(新しい順) */
+export async function getRecentRuns(limit: number): Promise<SavedRun[]> {
+  const database = await getDB();
+  const [result] = await database.executeSql(
+    'SELECT * FROM run_records ORDER BY created_at DESC LIMIT ?',
+    [limit],
+  );
+  const rows: SavedRun[] = [];
+  for (let i = 0; i < result.rows.length; i++) {
+    const r = result.rows.item(i);
+    rows.push({
+      id: r.id,
+      date: r.date,
+      meters: r.meters,
+      durationS: r.duration_s,
+      paceMinKm: r.pace_min_km,
+      calories: r.calories,
+      createdAt: r.created_at,
+    });
+  }
+  return rows;
+}
+
+export async function deleteRun(id: number): Promise<void> {
+  const database = await getDB();
+  await database.executeSql('DELETE FROM run_records WHERE id = ?', [id]);
+}
+
+export async function clearRuns(): Promise<void> {
+  const database = await getDB();
+  await database.executeSql('DELETE FROM run_records');
 }
 
 // ── 設定 ──────────────────────────────────────────────────────
@@ -175,10 +116,11 @@ export interface AppSettings {
   summaryMinute: number;
   notificationsEnabled: boolean;
   geminiApiKey: string;
-  weightKg: number;  // カロリー計算用
+  /** カロリー計算用 */
+  weightKg: number;
 }
 
-const DEFAULT_SETTINGS: AppSettings = {
+export const DEFAULT_SETTINGS: AppSettings = {
   metersPerScreen: 1.0,
   summaryHour: 21,
   summaryMinute: 0,
@@ -187,32 +129,20 @@ const DEFAULT_SETTINGS: AppSettings = {
   weightKg: 60,
 };
 
+const SETTINGS_KEY = 'debtrun_settings';
+
 export async function loadSettings(): Promise<AppSettings> {
-  const raw = await AsyncStorage.getItem('debtrun_settings');
+  const raw = await AsyncStorage.getItem(SETTINGS_KEY);
   if (!raw) return { ...DEFAULT_SETTINGS };
-  return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  try {
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
 }
 
-export async function saveSettings(settings: Partial<AppSettings>): Promise<void> {
-  const current = await loadSettings();
-  await AsyncStorage.setItem('debtrun_settings', JSON.stringify({ ...current, ...settings }));
-}
-
-// ── ユーティリティ ──────────────────────────────────────────────
-
-export function getTodayKey(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-export function formatDistance(meters: number): string {
-  if (meters >= 1000) return `${(meters / 1000).toFixed(2)} km`;
-  return `${Math.round(meters)} m`;
-}
-
-export function formatDuration(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+export async function saveSettings(settings: Partial<AppSettings>): Promise<AppSettings> {
+  const next = { ...(await loadSettings()), ...settings };
+  await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+  return next;
 }

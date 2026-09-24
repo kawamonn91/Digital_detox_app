@@ -6,13 +6,11 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView,
-  TextInput, Switch, TouchableOpacity, Alert,
-  NativeModules,
+  TextInput, Switch, TouchableOpacity, Alert, AppState,
 } from 'react-native';
 import { useAppStore } from '../store/useAppStore';
+import { dailySummary, scrollTracker, usageStats } from '../services/nativeModules';
 import { COLORS, FONTS, RADIUS } from '../theme';
-
-const { UsageStats, ScrollTracker } = NativeModules;
 
 export default function SettingsScreen() {
   const { settings, setSettings } = useAppStore();
@@ -26,20 +24,23 @@ export default function SettingsScreen() {
   const [hasUsagePerm, setHasUsagePerm] = useState(false);
   const [hasAccessPerm, setHasAccessPerm] = useState(false);
 
-  useEffect(() => {
-    checkPermissions();
-  }, []);
-
   const checkPermissions = async () => {
     try {
-      const usage  = await UsageStats?.hasUsagePermission();
-      const access = await ScrollTracker?.isAccessibilityEnabled();
-      setHasUsagePerm(!!usage);
-      setHasAccessPerm(!!access);
+      setHasUsagePerm(await usageStats.hasPermission());
+      setHasAccessPerm(await scrollTracker.isEnabled());
     } catch (e) {
       console.warn('Permission check error:', e);
     }
   };
+
+  // 許可の設定画面から戻ってきたときに表示を更新する
+  useEffect(() => {
+    checkPermissions();
+    const sub = AppState.addEventListener('change', state => {
+      if (state === 'active') checkPermissions();
+    });
+    return () => sub.remove();
+  }, []);
 
   const saveMps = () => {
     const val = parseFloat(mps);
@@ -47,8 +48,10 @@ export default function SettingsScreen() {
       Alert.alert('無効な値', '0.1〜100の数値を入力してください。');
       return;
     }
-    setSettings({ metersPerScreen: val });
-    Alert.alert('保存しました', `1画面 = ${val}m に設定しました。`);
+    const rounded = Math.round(val * 10) / 10;
+    setSettings({ metersPerScreen: rounded });
+    setMps(String(rounded));
+    Alert.alert('保存しました', `1画面 = ${rounded}m に設定しました。過去の記録も新しい比率で計算し直します。`);
   };
 
   const saveSummaryTime = () => {
@@ -58,12 +61,14 @@ export default function SettingsScreen() {
       return;
     }
     setSettings({ summaryHour: h, summaryMinute: m });
-    Alert.alert('保存しました', `毎日 ${summaryTime} にまとめを通知します。`);
+    const label = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    setSummaryTime(label);
+    Alert.alert('保存しました', `毎日 ${label} にその日のまとめを通知します。`);
   };
 
   const saveApiKey = () => {
     setSettings({ geminiApiKey: apiKey.trim() });
-    Alert.alert('保存しました', apiKey.trim() ? 'Gemini APIキーを設定しました。' : 'APIキーをクリアしました（ローカルAIを使用します）。');
+    Alert.alert('保存しました', apiKey.trim() ? 'Gemini APIキーを設定しました。' : 'APIキーをクリアしました（データからローカルで提案します）。');
   };
 
   const saveWeight = () => {
@@ -89,19 +94,13 @@ export default function SettingsScreen() {
           label="スクリーンタイム取得"
           desc="アプリ別の使用時間を計測"
           granted={hasUsagePerm}
-          onPress={async () => {
-            await UsageStats?.openUsageAccessSettings();
-            setTimeout(checkPermissions, 2000);
-          }}
+          onPress={() => usageStats.openSettings()}
         />
         <PermissionRow
           label="スクロール計測"
           desc="他アプリのスクロール距離を自動計測（要アクセシビリティ許可）"
           granted={hasAccessPerm}
-          onPress={async () => {
-            await ScrollTracker?.openAccessibilitySettings();
-            setTimeout(checkPermissions, 2000);
-          }}
+          onPress={() => scrollTracker.openSettings()}
         />
       </View>
 
@@ -172,6 +171,7 @@ export default function SettingsScreen() {
         <View style={[styles.settingRow, { marginTop: 8 }]}>
           <View style={styles.settingInfo}>
             <Text style={styles.settingLabel}>通知を有効にする</Text>
+            <Text style={styles.settingDesc}>その日のスクロール・ランニング・使用時間をまとめて通知します</Text>
           </View>
           <Switch
             value={settings.notificationsEnabled}
@@ -180,6 +180,9 @@ export default function SettingsScreen() {
             thumbColor="white"
           />
         </View>
+        <TouchableOpacity style={[styles.saveBtnFull, { marginTop: 12 }]} onPress={() => dailySummary.showNow()}>
+          <Text style={styles.saveBtnText}>今すぐまとめ通知を試す</Text>
+        </TouchableOpacity>
       </View>
 
       {/* ── AI設定 ── */}
@@ -190,7 +193,7 @@ export default function SettingsScreen() {
           <Text style={styles.settingLabel}>Gemini APIキー</Text>
           <Text style={styles.settingDesc}>
             https://aistudio.google.com でAPIキーを取得できます。{'\n'}
-            空欄の場合はローカルAIを使用します（完全無料）。
+            空欄の場合は、記録データからアプリ内で提案を作ります（通信なし）。
           </Text>
           <TextInput
             style={styles.apiInput}
