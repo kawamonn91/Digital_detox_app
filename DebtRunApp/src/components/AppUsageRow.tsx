@@ -1,34 +1,30 @@
 /**
  * AppUsageRow.tsx
- * アプリ別スクロール使用状況の1行コンポーネント
+ * アプリ別のスクロール量・使用時間の1行コンポーネント
  */
 
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { COLORS, FONTS, RADIUS } from '../theme';
-
-interface ScrollRecord {
-  packageName?: string;
-  appName?: string;
-  screens: number;
-  meters: number;
-  totalPx?: number;
-}
+import { AppRow } from '../domain/dashboard';
+import { formatDistance, formatScreenTime } from '../domain/format';
+import { COLORS, FONTS } from '../theme';
 
 interface Props {
-  record: ScrollRecord;
+  record: AppRow;
 }
 
 // アプリパッケージ → 絵文字マップ
 const APP_ICONS: Record<string, string> = {
   'com.instagram.android': '📸',
   'com.twitter.android': '🐦',
+  'com.instagram.barcelona': '🧵',
   'com.zhiliaoapp.musically': '🎵',
   'com.google.android.youtube': '▶️',
   'com.facebook.katana': '👤',
   'com.reddit.frontpage': '🤖',
   'com.ss.android.ugc.trill': '🎵',
-  'com.linkedin.android': '💼',
+  'com.pinterest': '📌',
+  'com.snapchat.android': '👻',
 };
 
 function getAppIcon(packageName?: string): string {
@@ -36,38 +32,21 @@ function getAppIcon(packageName?: string): string {
   return APP_ICONS[packageName] || '📱';
 }
 
-function getDisplayName(record: ScrollRecord): string {
-  if (record.appName) return record.appName;
-  if (record.packageName) {
-    const parts = record.packageName.split('.');
-    return parts[parts.length - 1] || record.packageName;
-  }
-  return 'Unknown';
-}
-
 export default function AppUsageRow({ record }: Props) {
-  const icon = getAppIcon(record.packageName);
-  const name = getDisplayName(record);
-  const meters = record.meters;
-  const screens = record.screens;
-
   return (
     <View style={styles.row}>
-      <Text style={styles.icon}>{icon}</Text>
+      <Text style={styles.icon}>{getAppIcon(record.packageName)}</Text>
       <View style={styles.info}>
         <Text style={styles.appName} numberOfLines={1}>
-          {name}
+          {record.appName}
         </Text>
         <Text style={styles.screens}>
-          {screens.toFixed(1)} 画面
+          {record.screens.toFixed(1)} 画面
+          {record.timeMs !== null ? ` ・ ${formatScreenTime(record.timeMs)}` : ''}
         </Text>
       </View>
       <View style={styles.metersContainer}>
-        <Text style={styles.meters}>
-          {meters >= 1000
-            ? `${(meters / 1000).toFixed(2)} km`
-            : `${Math.round(meters)} m`}
-        </Text>
+        <Text style={styles.meters}>{formatDistance(record.meters)}</Text>
         <Text style={styles.metersLabel}>スクロール負債</Text>
       </View>
     </View>

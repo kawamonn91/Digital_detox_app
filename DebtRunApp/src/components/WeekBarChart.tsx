@@ -1,64 +1,38 @@
 /**
  * WeekBarChart.tsx
- * 週間スクロール vs ランニング棒グラフ（Viewベース、SVG不使用）
+ * 週間スクロール vs ランニング棒グラフ（Viewベース、SVG不使用）。日付ごとにそろえて表示する
  */
 
 import React from 'react';
-import { View, Text, StyleSheet, Dimensions } from 'react-native';
-import { COLORS, FONTS } from '../theme';
+import { View, Text, StyleSheet } from 'react-native';
+import { WeekBar } from '../domain/stats';
+import { COLORS } from '../theme';
 
-interface DailyTrend {
-  date: string;
-  screens: number;
-  meters: number;
-}
-interface RunTrend {
-  date: string;
-  meters: number;
-}
 interface Props {
-  scrollData: DailyTrend[];
-  runData: RunTrend[];
+  /** 直近7日分(古い順)。記録のない日も0で入っている */
+  data: WeekBar[];
 }
 
 const CHART_HEIGHT = 100;
-const DAYS = ['月', '火', '水', '木', '金', '土', '日'];
 
-export default function WeekBarChart({ scrollData, runData }: Props) {
-  const n = 7;
-
-  const maxMeters = Math.max(
-    ...scrollData.map(d => d.meters),
-    ...runData.map(d => d.meters),
-    1,
-  );
+export default function WeekBarChart({ data }: Props) {
+  const maxMeters = Math.max(...data.map(d => Math.max(d.scrollMeters, d.runMeters)), 1);
 
   return (
     <View style={styles.container}>
-      {/* 棒グラフ本体 */}
-      <View style={[styles.chartArea, { height: CHART_HEIGHT }]}>
-        {Array.from({ length: n }).map((_, i) => {
-          const scrollRec = scrollData[i];
-          const runRec    = runData[i];
-          const scrollH   = scrollRec ? (scrollRec.meters / maxMeters) * CHART_HEIGHT : 0;
-          const runH      = runRec    ? (runRec.meters    / maxMeters) * CHART_HEIGHT : 0;
-
-          const label = scrollRec
-            ? (() => {
-                const d = new Date(scrollRec.date);
-                return DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
-              })()
-            : DAYS[i];
-
+      <View style={[styles.chartArea, { height: CHART_HEIGHT + 18 }]}>
+        {data.map(day => {
+          const scrollH = (day.scrollMeters / maxMeters) * CHART_HEIGHT;
+          const runH = (day.runMeters / maxMeters) * CHART_HEIGHT;
           return (
-            <View key={i} style={styles.barGroup}>
+            <View key={day.date} style={styles.barGroup}>
               <View style={styles.barsRow}>
-                {/* スクロール棒（赤） */}
+                {/* スクロール棒(赤) */}
                 <View style={[styles.bar, styles.scrollBar, { height: Math.max(2, scrollH) }]} />
-                {/* ランニング棒（緑） */}
+                {/* ランニング棒(緑) */}
                 <View style={[styles.bar, styles.runBar, { height: Math.max(2, runH) }]} />
               </View>
-              <Text style={styles.dayLabel}>{label}</Text>
+              <Text style={styles.dayLabel}>{day.label}</Text>
             </View>
           );
         })}

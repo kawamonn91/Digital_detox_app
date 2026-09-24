@@ -13,10 +13,10 @@ class UsageStatsPackage : ReactPackage {
         emptyList()
 }
 
-// ScrollTracker パッケージ登録
+// ScrollTracker(スクロール計測)と DailySummary(一日のまとめ通知)のパッケージ登録
 class ScrollTrackerPackage : ReactPackage {
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> =
-        listOf(ScrollTrackerNativeModule(reactContext))
+        listOf(ScrollTrackerNativeModule(reactContext), DailySummaryModule(reactContext))
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> =
         emptyList()
 }

@@ -1,97 +1,54 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# DebtRun
 
-# Getting Started
+スマホのスクロール距離を「負債」として貯め、ランニングで返済するスマホ依存改善アプリ(React Native / Android)。
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+## 仕組み
 
-## Step 1: Start Metro
+- **スクロール負債**: SNS・動画アプリ(Instagram / Threads / X / TikTok / YouTube / Facebook / Reddit / Pinterest / Snapchat)で
+  スクロールした距離を「画面数」で記録し、換算比率(初期値 1画面 = 1m)を掛けて負債にする。
+- **繰り越し**: 負債は日をまたいで貯まっていく。その日の残債 = max(0, 前日の残債 + その日のスクロール - その日のランニング)。
+  走りすぎた分は貯金にならない。換算比率を変えると過去分も新しい比率で計算し直す。
+- **返済**: GPSでランニングを計測し、走った距離だけ負債を減らす。計測中は常駐通知を出すので、画面を消しても計測が続く。
+- **スクリーンタイム**: 対象アプリの使用時間を日別・アプリ別に記録し、ホームとまとめに表示する。
+- **一日のまとめ**: 設定した時刻に、その日のスクロール・ランニング・使用時間を通知する。タップすると繰り越し込みの残債などのまとめ画面を開く。
+- **AI提案**: 直近7日の記録から、デトックスのコツと換算比率のおすすめを出す。
+  換算比率は「1日のスクロール負債が、普段のランニングの1.2倍(ほぼ走っていなければ1.5km)で返せる値」を基準にする。
+  Gemini APIキーを設定すると、この基準値とデータを Gemini に渡して提案を作る(1日1回、キャッシュ)。キーが無ければ端末内で作る。
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+## 必要な許可(アプリ内の案内・設定画面から開ける)
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+| 許可 | 用途 |
+|---|---|
+| ユーザー補助(アクセシビリティ)「DebtRun スクロール計測」 | 対象アプリのスクロール量を記録する。画面の文字などは使わない |
+| 使用状況へのアクセス | 対象アプリの使用時間(スクリーンタイム) |
+| 位置情報 | ランニング計測 |
+| 通知 | 一日のまとめ通知・ランニング計測中の常駐通知 |
 
-```sh
-# Using npm
-npm start
+## 構成
 
-# OR using Yarn
-yarn start
+```
+src/domain/     計算ロジック(純関数・Jestでテスト)。日付・負債の繰り越し・集計・換算比率のおすすめ・まとめ文言
+src/services/   ネイティブモジュールの型付きラッパー、ランニング記録(SQLite)・設定(AsyncStorage)、Gemini、ランニングの常駐通知
+src/store/      Zustand。記録を読み込み domain/dashboard.ts で画面用の数字を計算する
+src/screens/    ホーム / ランニング / AI提案 / 設定
+android/app/src/main/java/com/debtrunapp/
+  ScrollTrackerService.kt   アクセシビリティサービス。スクロール量を ScrollLog に保存(アプリが起動していなくても記録される)
+  ScrollLog.kt              日付・アプリ別のスクロール量(px)の保存
+  UsageTime.kt / UsageStatsModule.kt  使用時間(前面/背面の切り替えイベントから期間内の時間だけを集計)
+  DailySummary.kt           一日のまとめ通知(AlarmManager で指定時刻に集計して通知、再起動後も予約し直す)
+  TrackedApps.kt            計測対象アプリの一覧(accessibility_service_config.xml と合わせる)
 ```
 
-## Step 2: Build and run your app
+日付はすべて端末のローカル日付(`src/domain/dates.ts` の `localDateKey`)で扱う。
+`new Date().toISOString()` は UTC なので、日本時間では0〜9時の記録が前日扱いになってしまう。
 
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
-
-### Android
-
-```sh
-# Using npm
-npm run android
-
-# OR using Yarn
-yarn android
-```
-
-### iOS
-
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
-
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
+## 開発
 
 ```sh
-bundle install
+npm install
+npm test            # Jest(domain のユニットテスト + アプリ全体の描画テスト)
+npx tsc --noEmit    # 型チェック
+npm run lint
+npm start           # Metro
+npm run android     # 実機/エミュレータで起動
 ```
-
-Then, and every time you update your native dependencies, run:
-
-```sh
-bundle exec pod install
-```
-
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
-
-```sh
-# Using npm
-npm run ios
-
-# OR using Yarn
-yarn ios
-```
-
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
-
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
-
-## Step 3: Modify your app
-
-Now that you have successfully run the app, let's make changes!
-
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
-
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
-
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
-
-## Congratulations! :tada:
-
-You've successfully run and modified your React Native App. :partying_face:
-
-### Now what?
-
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
-
-# Troubleshooting
-
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
-
-# Learn More
-
-To learn more about React Native, take a look at the following resources:
-
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.

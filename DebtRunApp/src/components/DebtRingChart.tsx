@@ -11,13 +11,12 @@ import { COLORS, FONTS } from '../theme';
 interface Props {
   percent: number;   // 0.0 ~ 1.0
   screens: number;
-  meters: number;
 }
 
 const SIZE = 130;
 const THICKNESS = 12;
 
-export default function DebtRingChart({ percent, screens, meters }: Props) {
+export default function DebtRingChart({ percent, screens }: Props) {
   const animVal = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -26,7 +25,7 @@ export default function DebtRingChart({ percent, screens, meters }: Props) {
       duration: 900,
       useNativeDriver: false,
     }).start();
-  }, [percent]);
+  }, [animVal, percent]);
 
   const isComplete = percent >= 1;
   const ringColor  = isComplete ? COLORS.green400 : COLORS.purple400;

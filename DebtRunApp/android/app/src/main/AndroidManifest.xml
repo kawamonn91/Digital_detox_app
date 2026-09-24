@@ -2,29 +2,35 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- ── 基本権限 ── -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 一日のまとめ通知(Android 13以降は実行時に許可を求める) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- 再起動後に一日のまとめ通知を予約し直す -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- notifee が追加する「正確なアラーム」の権限は使わない(まとめ通知は数分のずれを許す通常のアラームで予約する) -->
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        tools:node="remove" />
 
-    <!-- ── スクリーンタイム取得 ── -->
+    <!-- スクリーンタイム取得(「使用状況へのアクセス」画面でユーザーが許可する) -->
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
 
-    <!-- ── GPS ランニングトラッカー ── -->
+    <!-- GPS ランニング計測。計測中は前面サービス(通知)を出して、画面を消しても計測を続ける -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
-    <!-- ── バックグラウンド継続 ── -->
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- スクリーンタイムからホーム画面(ランチャー)にいた時間を除くため、ホームアプリを調べる -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+    </queries>
 
     <application
         android:name=".MainApplication"
@@ -33,7 +39,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:allowBackup="false"
         android:theme="@style/AppTheme"
-        android:usesCleartextTraffic="true">
+        android:usesCleartextTraffic="${usesCleartextTraffic}">
 
         <activity
             android:name=".MainActivity"
@@ -46,9 +52,16 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- まとめ通知のタップで debtrun://summary を開く -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="debtrun" android:host="summary" />
+            </intent-filter>
         </activity>
 
-        <!-- スクロールトラッカー AccessibilityService -->
+        <!-- スクロール計測(アクセシビリティサービス) -->
         <service
             android:name=".ScrollTrackerService"
             android:label="DebtRun スクロール計測"
@@ -62,20 +75,22 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- ランニング フォアグラウンドサービス -->
-        <service
-            android:name=".RunningForegroundService"
-            android:foregroundServiceType="location"
-            android:exported="false" />
-
-        <!-- 毎日まとめ通知 AlarmReceiver -->
+        <!-- 一日のまとめ通知(予約した時刻の通知・再起動後の予約し直し) -->
         <receiver
             android:name=".DailySummaryReceiver"
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <!-- ランニング計測中の前面サービス。notifee の既定(shortService: 最長3分)を位置情報用に置き換える -->
+        <service
+            android:name="app.notifee.core.ForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="location"
+            tools:replace="android:foregroundServiceType" />
 
     </application>
 </manifest>

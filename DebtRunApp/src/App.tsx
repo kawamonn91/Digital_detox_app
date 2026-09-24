@@ -1,40 +1,58 @@
 /**
  * App.tsx
- * メインエントリ — ナビゲーション、初期化、通知スケジューラ
+ * メインエントリ — ナビゲーション、初期化、まとめ通知の設定
  */
 
 import React, { useEffect } from 'react';
-import { StatusBar, Platform, Text } from 'react-native';
+import { StatusBar, Text, Linking } from 'react-native';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import notifee, { AndroidImportance, TriggerType } from '@notifee/react-native';
+import notifee from '@notifee/react-native';
 
 import DashboardScreen from './screens/DashboardScreen';
 import RunningScreen   from './screens/RunningScreen';
 import AIScreen        from './screens/AIScreen';
 import SettingsScreen  from './screens/SettingsScreen';
+import DailySummaryModal from './components/DailySummaryModal';
 import { initDB }      from './services/storageService';
+import { dailySummary } from './services/nativeModules';
 import { useAppStore } from './store/useAppStore';
-import { COLORS, RADIUS } from './theme';
+import { COLORS } from './theme';
 
 const Tab = createBottomTabNavigator();
 
 export default function App() {
-  const { refreshData, settings } = useAppStore();
+  const { refreshData, settings, openSummary } = useAppStore();
 
   useEffect(() => {
-    // DB 初期化 → データ読み込み
     (async () => {
       await initDB();
       await refreshData();
     })();
-  }, []);
+  }, [refreshData]);
 
-  // 毎日まとめ通知のスケジューリング
+  // まとめ通知の設定をネイティブ側に渡す(時刻になるとネイティブが今日の集計を通知する)
   useEffect(() => {
-    scheduleDailySummary(settings.summaryHour, settings.summaryMinute);
-  }, [settings.summaryHour, settings.summaryMinute, settings.notificationsEnabled]);
+    (async () => {
+      if (settings.notificationsEnabled) await notifee.requestPermission();
+      await dailySummary.configure(
+        settings.summaryHour, settings.summaryMinute, settings.notificationsEnabled, settings.metersPerScreen,
+      );
+    })().catch(e => console.warn('[DailySummary] configure failed:', e));
+  }, [settings.summaryHour, settings.summaryMinute, settings.notificationsEnabled, settings.metersPerScreen]);
+
+  // まとめ通知のタップ(debtrun://summary)でまとめ画面を開く
+  useEffect(() => {
+    const handle = (url: string | null) => {
+      if (url?.startsWith('debtrun://summary')) {
+        refreshData().then(openSummary);
+      }
+    };
+    Linking.getInitialURL().then(handle);
+    const sub = Linking.addEventListener('url', e => handle(e.url));
+    return () => sub.remove();
+  }, [refreshData, openSummary]);
 
   return (
     <SafeAreaProvider>
@@ -128,50 +146,8 @@ export default function App() {
             options={{ title: '設定' }}
           />
         </Tab.Navigator>
+        <DailySummaryModal />
       </NavigationContainer>
     </SafeAreaProvider>
   );
-}
-
-// ── 毎日まとめ通知 ──
-
-async function scheduleDailySummary(hour: number, minute: number) {
-  try {
-    // 既存の通知をキャンセル
-    await notifee.cancelAllNotifications();
-
-    // チャンネル作成 (Android)
-    const channelId = await notifee.createChannel({
-      id: 'daily-summary',
-      name: 'デイリーまとめ',
-      importance: AndroidImportance.HIGH,
-    });
-
-    // 次の通知時刻を計算
-    const now = new Date();
-    const next = new Date();
-    next.setHours(hour, minute, 0, 0);
-    if (next <= now) next.setDate(next.getDate() + 1);
-
-    await notifee.createTriggerNotification(
-      {
-        title: '📊 今日のDebtRunまとめ',
-        body: 'タップして今日のスクロール負債とランニング記録を確認しましょう',
-        android: {
-          channelId,
-          pressAction: { id: 'default' },
-          smallIcon: 'ic_notification',
-        },
-      },
-      {
-        type: TriggerType.TIMESTAMP,
-        timestamp: next.getTime(),
-        repeatFrequency: 1, // 毎日繰り返し
-      }
-    );
-
-    console.log('[Notifications] Daily summary scheduled:', next.toLocaleString());
-  } catch (e) {
-    console.warn('[Notifications] Failed to schedule:', e);
-  }
 }

@@ -10,81 +10,70 @@ import {
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import { useAppStore } from '../store/useAppStore';
-import { getDailyScrollTotals, getDailyRunTotals, getRunStreak } from '../services/storageService';
-import { getGeminiRecommendation, WeeklySummary, GeminiRecommendation } from '../services/geminiService';
+import { USAGE_DAYS } from '../store/useAppStore';
+import {
+  getFallbackRecommendation, getGeminiRecommendation, GeminiRecommendation, WeeklySummary,
+} from '../services/geminiService';
+import { localDateKey } from '../domain/dates';
+import { dailyAverages, recommendRatio } from '../domain/stats';
+import { avgScreenTimeMinutes, topApp } from '../domain/dashboard';
 import { COLORS, FONTS, RADIUS } from '../theme';
 
-const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
-
 export default function AIScreen() {
-  const { settings, setSettings } = useAppStore();
+  const { settings, setSettings, dashboard, usage, screenTime } = useAppStore();
   const [loading, setLoading] = useState(false);
   const [rec, setRec] = useState<GeminiRecommendation | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string>('');
 
-  useEffect(() => {
-    loadRecommendation();
-  }, []);
-
-  const buildWeeklySummary = async (): Promise<WeeklySummary> => {
-    const [scrollData, runData, streak] = await Promise.all([
-      getDailyScrollTotals(7),
-      getDailyRunTotals(7),
-      getRunStreak(),
-    ]);
-
-    const avgScreens = scrollData.length
-      ? scrollData.reduce((s, d) => s + (d.screens || 0), 0) / scrollData.length
-      : 0;
-    const avgRunMeters = runData.length
-      ? runData.reduce((s, d) => s + d.meters, 0) / runData.length
-      : 0;
-
-    // 最もスクロールが多い/少ない曜日
-    const scrollByDay = scrollData.map(d => ({
-      day: WEEKDAYS[new Date(d.date).getDay()],
-      screens: d.screens || 0,
-    }));
-    const worstDay = scrollByDay.reduce((max, d) => d.screens > max.screens ? d : max, scrollByDay[0] || { day: '不明', screens: 0 });
-    const bestRunDay = runData.reduce((max: any, d: any) => d.meters > (max?.meters || 0) ? d : max, null);
-
+  const buildWeeklySummary = (): WeeklySummary => {
+    const today = localDateKey();
+    const week = dashboard.week;
+    const avg = dailyAverages(dashboard.days, today);
+    const worst = week.reduce((max, d) => (d.scrollMeters > max.scrollMeters ? d : max), week[0]);
+    const bestRun = week.reduce((max, d) => (d.runMeters > max.runMeters ? d : max), week[0]);
+    const top = topApp(usage, USAGE_DAYS);
     return {
-      avgDailyScrollScreens: avgScreens,
-      avgDailyRunMeters: avgRunMeters,
-      worstDayOfWeek: worstDay.day,
-      bestDayOfWeek: bestRunDay ? WEEKDAYS[new Date(bestRunDay.date).getDay()] : '記録なし',
-      topApp: 'Instagram',   // TODO: UsageStats から取得
-      topAppMinutes: 0,
+      avgDailyScrollScreens: avg.screens,
+      avgDailyRunMeters: avg.runMeters,
+      worstDayOfWeek: worst && worst.scrollMeters > 0 ? worst.label : '不明',
+      bestDayOfWeek: bestRun && bestRun.runMeters > 0 ? bestRun.label : '記録なし',
+      topApp: top?.appName ?? null,
+      topAppMinutes: top?.avgMinutes ?? 0,
+      avgScreenTimeMinutes: avgScreenTimeMinutes(screenTime),
       currentMeterPerScreen: settings.metersPerScreen,
-      totalDebtMeters: scrollData.reduce((s, d) => s + (d.meters || 0), 0),
-      totalRunMeters: runData.reduce((s, d) => s + d.meters, 0),
-      runDaysCount: runData.filter(d => d.meters > 0).length,
-      streak,
+      ratioBaseline: recommendRatio(avg.screens, avg.runMeters),
+      currentDebtMeters: dashboard.debtMeters,
+      totalDebtMeters: week.reduce((s, d) => s + d.scrollMeters, 0),
+      totalRunMeters: week.reduce((s, d) => s + d.runMeters, 0),
+      runDaysCount: week.filter(d => d.runMeters > 0).length,
+      streak: dashboard.streak,
     };
   };
 
-  const loadRecommendation = async () => {
+  const loadRecommendation = async (force = false) => {
+    const summary = buildWeeklySummary();
     if (!settings.geminiApiKey) {
-      // APIキー未設定 → フォールバック
-      const summary = await buildWeeklySummary();
-      const { getFallbackRecommendation } = await import('../services/geminiService');
+      // APIキー未設定 → データからローカルで提案を作る
       setRec(getFallbackRecommendation(summary));
       setLastUpdated(new Date().toLocaleTimeString('ja-JP'));
       return;
     }
-
     setLoading(true);
     try {
-      const summary = await buildWeeklySummary();
-      const result = await getGeminiRecommendation(summary, settings.geminiApiKey);
-      setRec(result);
+      setRec(await getGeminiRecommendation(summary, settings.geminiApiKey, force));
       setLastUpdated(new Date().toLocaleTimeString('ja-JP'));
-    } catch (e) {
+    } catch {
       Alert.alert('エラー', 'AIレコメンドの取得に失敗しました。');
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    loadRecommendation();
+    // 初回表示時のみ。再分析はボタンから
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const applyRatioSuggestion = () => {
     if (!rec?.ratiSuggestion) return;
@@ -112,7 +101,7 @@ export default function AIScreen() {
         end={{ x: 1, y: 1 }}
       >
         <View style={styles.aiBadge}>
-          <Text style={styles.aiBadgeText}>✨ Gemini AI</Text>
+          <Text style={styles.aiBadgeText}>{settings.geminiApiKey ? '✨ Gemini AI' : '✨ ローカル分析'}</Text>
         </View>
         <Text style={styles.headerTitle}>AIレコメンド</Text>
         <Text style={styles.headerSub}>あなたのデータをもとにパーソナライズドアドバイスを提供</Text>
@@ -217,7 +206,7 @@ export default function AIScreen() {
       {/* ── 更新ボタン ── */}
       <TouchableOpacity
         style={styles.refreshBtn}
-        onPress={loadRecommendation}
+        onPress={() => loadRecommendation(true)}
         disabled={loading}
       >
         <LinearGradient
