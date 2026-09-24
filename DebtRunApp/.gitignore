@@ -73,3 +73,7 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# リリース署名(公開しない)
+keystore.properties
+*.jks
