@@ -14,6 +14,8 @@ import com.facebook.react.modules.core.DeviceEventManagerModule
  *
  * AccessibilityService で対象アプリ(SNS・動画アプリ)のスクロールイベントを受け取り、
  * スクロール量(px)を日付・アプリ別に [ScrollLog] へ保存する。
+ * YouTube ショートは、次の動画へ切り替わってもスクロール量が報告されないので、切り替わり自体を
+ * [ShortsPageDetector] で見つけて、1本 = 画面1枚ぶんとして保存する。
  * アプリ(JS)が起動中なら "ScrollTrackerUpdate" イベントも送り、画面をすぐ更新させる。
  */
 class ScrollTrackerService : AccessibilityService() {
@@ -34,6 +36,9 @@ class ScrollTrackerService : AccessibilityService() {
     /** scrollDeltaY を報告しないアプリ用に、直前の scrollY をビューごとに覚えておく */
     private val lastScrollY = mutableMapOf<String, Int>()
 
+    /** YouTube ショートの動画の切り替えを、スクロール量とは別に数える(ショートはスクロール量を報告しないため) */
+    private val shortsDetector = ShortsPageDetector()
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         val wm = getSystemService(WindowManager::class.java)
@@ -51,15 +56,29 @@ class ScrollTrackerService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
-        if (event.eventType != AccessibilityEvent.TYPE_VIEW_SCROLLED) return
         val pkg = event.packageName?.toString() ?: return
         if (!TrackedApps.NAMES.containsKey(pkg)) return
 
-        val scrolledPx = scrolledPixels(event, pkg)
-        if (scrolledPx <= 0f) return
-
-        ScrollLog.add(this, pkg, scrolledPx)
-        emitUpdate(pkg)
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                val scrolledPx = scrolledPixels(event, pkg)
+                if (scrolledPx <= 0f) return
+                if (pkg == ShortsPageDetector.PACKAGE_NAME) shortsDetector.onScrollCounted(event.eventTime)
+                ScrollLog.add(this, pkg, scrolledPx)
+                emitUpdate(pkg)
+            }
+            // YouTube ショートで次の動画へ切り替わったら、画面1枚ぶん(1本 = 画面1枚)として数える
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                if (pkg != ShortsPageDetector.PACKAGE_NAME) return
+                val counted = shortsDetector.onContentChanged(event.className, event.eventTime)
+                // 動作の確認用(ショートの切り替えを数えたか。SeekBar 以外の内容変更は、量が多いので出さない)
+                if (event.className?.toString() == ShortsPageDetector.SEEK_BAR) Log.d(TAG, "YouTube SeekBar event, counted as page change: $counted")
+                if (counted) {
+                    ScrollLog.add(this, pkg, screenHeightPx)
+                    emitUpdate(pkg)
+                }
+            }
+        }
     }
 
     /**

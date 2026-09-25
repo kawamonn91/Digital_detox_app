@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  ScrollTrackerService の設定。スクロールイベントだけを、対象アプリ(TrackedApps.kt と同じ一覧)から受け取る。
-  画面の文字などは読み取らない(スクロール量だけを使う)。
+  ScrollTrackerService の設定。対象アプリ(TrackedApps.kt と同じ一覧)から、次の2種類のイベントだけを受け取る。
+    - スクロール(typeViewScrolled): スクロール量を記録する
+    - 内容の変更(typeWindowContentChanged): YouTube ショートの動画の切り替わりを数えるためだけに使う(ShortsPageDetector)
+  画面の文字などは読み取らない(canRetrieveWindowContent = false。イベントの種類とビューのクラス名しか使わない)。
 -->
 <accessibility-service
     xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeViewScrolled"
+    android:accessibilityEventTypes="typeViewScrolled|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagDefault"
     android:canRetrieveWindowContent="false"

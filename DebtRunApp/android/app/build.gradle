@@ -83,8 +83,8 @@ android {
         applicationId "com.ttech.debtrun"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0.0"
+        versionCode 2
+        versionName "1.0.1"
     }
     // リリース署名。keystore.properties(gitignore対象)が無い環境ではデバッグ署名のままビルドが通る。
     def releaseProps = new Properties()
@@ -129,4 +129,6 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+
+    testImplementation("junit:junit:4.13.2")
 }
