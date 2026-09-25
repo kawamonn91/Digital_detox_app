@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">DebtRun</string>
-    <string name="accessibility_service_description">スマホの総スクロール距離を計測するためにアクセシビリティ権限を使用します。</string>
+    <string name="accessibility_service_description">スマホの総スクロール距離(YouTubeショートなどは動画の切り替え回数)を計測するためにアクセシビリティ権限を使用します。画面の文字や入力内容は読み取りません。</string>
 </resources>

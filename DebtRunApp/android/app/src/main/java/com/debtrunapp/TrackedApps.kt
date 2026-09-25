@@ -12,6 +12,7 @@ object TrackedApps {
         // TikTok は地域によってパッケージ名が異なる(日本版は trill)
         "com.zhiliaoapp.musically" to "TikTok",
         "com.ss.android.ugc.trill" to "TikTok",
+        // YouTube は、ショートの切り替えを ShortsPageDetector で数える(通常のスクロールは量が報告されないため数えられない)
         "com.google.android.youtube" to "YouTube",
         "com.facebook.katana" to "Facebook",
         "com.reddit.frontpage" to "Reddit",

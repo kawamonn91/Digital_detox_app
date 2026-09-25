@@ -6,6 +6,9 @@
 
 - **スクロール負債**: SNS・動画アプリ(Instagram / Threads / X / TikTok / YouTube / Facebook / Reddit / Pinterest / Snapchat)で
   スクロールした距離を「画面数」で記録し、換算比率(初期値 1画面 = 1m)を掛けて負債にする。
+  **YouTube ショート**は、次の動画へ切り替わってもスクロール量が報告されないため、動画の切り替わり1回を画面1枚ぶんとして数える
+  (進行バーの更新イベントを使う。実機の YouTube で、8回スワイプして8回・通常の動画では0回になることを確かめてある)。
+  なお YouTube の通常のスクロール(ホームの一覧・関連動画)もスクロール量が0で報告されるため、今のところ距離には数えられない。
 - **繰り越し**: 負債は日をまたいで貯まっていく。その日の残債 = max(0, 前日の残債 + その日のスクロール - その日のランニング)。
   走りすぎた分は貯金にならない。換算比率を変えると過去分も新しい比率で計算し直す。
 - **返済**: GPSでランニングを計測し、走った距離だけ負債を減らす。計測中は常駐通知を出すので、画面を消しても計測が続く。
@@ -33,6 +36,7 @@ src/store/      Zustand。記録を読み込み domain/dashboard.ts で画面用
 src/screens/    ホーム / ランニング / AI提案 / 設定
 android/app/src/main/java/com/debtrunapp/
   ScrollTrackerService.kt   アクセシビリティサービス。スクロール量を ScrollLog に保存(アプリが起動していなくても記録される)
+  ShortsPageDetector.kt     YouTube ショートの動画の切り替わりを見つける(スクロール量が報告されないため。JVMのテストあり)
   ScrollLog.kt              日付・アプリ別のスクロール量(px)の保存
   UsageTime.kt / UsageStatsModule.kt  使用時間(前面/背面の切り替えイベントから期間内の時間だけを集計)
   DailySummary.kt           一日のまとめ通知(AlarmManager で指定時刻に集計して通知、再起動後も予約し直す)
