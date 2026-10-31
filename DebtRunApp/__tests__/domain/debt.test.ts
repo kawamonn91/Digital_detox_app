@@ -1,4 +1,11 @@
-import { buildDebtLedger, carriedOverDebt, currentDebt, mergeDailyActivity } from '../../src/domain/debt';
+import {
+  buildDebtLedger,
+  carriedOverDebt,
+  currentDebt,
+  mergeDailyActivity,
+  parseMetersPerScreen,
+  remainingDebt,
+} from '../../src/domain/debt';
 
 describe('debt', () => {
   test('負債は日をまたいで繰り越される', () => {
@@ -67,5 +74,22 @@ describe('debt', () => {
       { date: '2026-09-23', screens: 30, runMeters: 0 },
       { date: '2026-09-24', screens: 150, runMeters: 1000 },
     ]);
+  });
+
+  test('remainingDebt は返済後の残債を計算し0未満にならない', () => {
+    expect(remainingDebt(1000, 400)).toBe(600);
+    expect(remainingDebt(1000, 1000)).toBe(0);
+    expect(remainingDebt(500, 800)).toBe(0);
+  });
+
+  test('parseMetersPerScreen は 0.1〜100 の範囲を小数第1位に丸める', () => {
+    expect(parseMetersPerScreen('1.25')).toBe(1.3);
+    expect(parseMetersPerScreen(2)).toBe(2);
+    expect(parseMetersPerScreen('0.1')).toBe(0.1);
+    expect(parseMetersPerScreen('100')).toBe(100);
+    expect(parseMetersPerScreen('0.05')).toBeNull();
+    expect(parseMetersPerScreen('100.1')).toBeNull();
+    expect(parseMetersPerScreen('abc')).toBeNull();
+    expect(parseMetersPerScreen(-1)).toBeNull();
   });
 });

@@ -10,13 +10,16 @@ import {
 } from 'react-native';
 import { useAppStore } from '../store/useAppStore';
 import { dailySummary, scrollTracker, usageStats } from '../services/nativeModules';
+import { parseMetersPerScreen } from '../domain/debt';
+import { formatTime, parseTime } from '../domain/format';
+import { parseWeightKg } from '../domain/running';
 import { COLORS, FONTS, RADIUS } from '../theme';
 
 export default function SettingsScreen() {
   const { settings, setSettings } = useAppStore();
   const [mps, setMps] = useState(settings.metersPerScreen.toString());
   const [summaryTime, setSummaryTime] = useState(
-    `${String(settings.summaryHour).padStart(2, '0')}:${String(settings.summaryMinute).padStart(2, '0')}`
+    formatTime(settings.summaryHour, settings.summaryMinute)
   );
   const [apiKey, setApiKey] = useState(settings.geminiApiKey);
   const [weight, setWeight] = useState(settings.weightKg.toString());
@@ -43,25 +46,25 @@ export default function SettingsScreen() {
   }, []);
 
   const saveMps = () => {
-    const val = parseFloat(mps);
-    if (isNaN(val) || val <= 0 || val > 100) {
+    const rounded = parseMetersPerScreen(mps);
+    if (rounded === null) {
       Alert.alert('無効な値', '0.1〜100の数値を入力してください。');
       return;
     }
-    const rounded = Math.round(val * 10) / 10;
+
     setSettings({ metersPerScreen: rounded });
     setMps(String(rounded));
     Alert.alert('保存しました', `1画面 = ${rounded}m に設定しました。過去の記録も新しい比率で計算し直します。`);
   };
 
   const saveSummaryTime = () => {
-    const [h, m] = summaryTime.split(':').map(Number);
-    if (isNaN(h) || isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+    const parsed = parseTime(summaryTime);
+    if (!parsed) {
       Alert.alert('無効な時刻', 'HH:MM 形式で入力してください（例: 21:00）');
       return;
     }
-    setSettings({ summaryHour: h, summaryMinute: m });
-    const label = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    setSettings({ summaryHour: parsed.hour, summaryMinute: parsed.minute });
+    const label = formatTime(parsed.hour, parsed.minute);
     setSummaryTime(label);
     Alert.alert('保存しました', `毎日 ${label} にその日のまとめを通知します。`);
   };
@@ -72,8 +75,8 @@ export default function SettingsScreen() {
   };
 
   const saveWeight = () => {
-    const val = parseFloat(weight);
-    if (isNaN(val) || val < 30 || val > 200) {
+    const val = parseWeightKg(weight);
+    if (val === null) {
       Alert.alert('無効な値', '30〜200kgの数値を入力してください。');
       return;
     }

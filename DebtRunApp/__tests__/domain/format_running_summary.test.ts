@@ -1,5 +1,19 @@
-import { formatDistance, formatDuration, formatPace, formatScreenTime } from '../../src/domain/format';
-import { haversine, paceMinPerKm, runCalories, segmentDistance } from '../../src/domain/running';
+import {
+  formatDistance,
+  formatDuration,
+  formatPace,
+  formatScreenTime,
+  formatTime,
+  parseTime,
+} from '../../src/domain/format';
+import {
+  haversine,
+  paceMinPerKm,
+  parseWeightKg,
+  runCalories,
+  segmentDistance,
+  speedKmh,
+} from '../../src/domain/running';
 import { buildDailySummary } from '../../src/domain/summary';
 
 describe('format', () => {
@@ -14,6 +28,17 @@ describe('format', () => {
     expect(formatPace(Infinity)).toBe('--:--');
     expect(formatScreenTime(83 * 60000)).toBe('1時間23分');
     expect(formatScreenTime(45 * 60000)).toBe('45分');
+  });
+
+  test('時刻の書式化とパース', () => {
+    expect(formatTime(9, 5)).toBe('09:05');
+    expect(formatTime(21, 30)).toBe('21:30');
+    expect(parseTime('21:00')).toEqual({ hour: 21, minute: 0 });
+    expect(parseTime('08:45')).toEqual({ hour: 8, minute: 45 });
+    expect(parseTime('24:00')).toBeNull();
+    expect(parseTime('12:60')).toBeNull();
+    expect(parseTime('invalid')).toBeNull();
+    expect(parseTime('12')).toBeNull();
   });
 });
 
@@ -37,6 +62,22 @@ describe('running', () => {
     expect(paceMinPerKm(5000, 25 * 60)).toBe(5);
     expect(paceMinPerKm(50, 60)).toBe(0);
     expect(runCalories(5000, 60)).toBeCloseTo(310.8, 1);
+  });
+
+  test('速度計算 (speedKmh)', () => {
+    // 1000m を 300秒(5分) で走ると 12 km/h
+    expect(speedKmh(1000, 300)).toBeCloseTo(12, 1);
+    expect(speedKmh(0, 300)).toBe(0);
+    expect(speedKmh(1000, 0)).toBe(0);
+    expect(speedKmh(1000, -10)).toBe(0);
+  });
+
+  test('体重パース (parseWeightKg)', () => {
+    expect(parseWeightKg('65.4')).toBe(65.4);
+    expect(parseWeightKg(70)).toBe(70);
+    expect(parseWeightKg('29.9')).toBeNull();
+    expect(parseWeightKg('201')).toBeNull();
+    expect(parseWeightKg('abc')).toBeNull();
   });
 });
 

@@ -24,6 +24,28 @@ export interface LedgerDay extends DayActivity {
   balance: number;
 }
 
+/** 換算比率(m/画面)の入力可能最小値 */
+export const MIN_METERS_PER_SCREEN = 0.1;
+/** 換算比率(m/画面)の入力可能最大値 */
+export const MAX_METERS_PER_SCREEN = 100;
+
+/**
+ * 換算比率(m/画面)の文字列または数値を検証・パースし、小数第1位に四捨五入する。
+ * 範囲外(0.1〜100以外)や不正な値なら null を返す。
+ */
+export function parseMetersPerScreen(input: string | number): number | null {
+  const val = typeof input === 'number' ? input : parseFloat(input);
+  if (Number.isNaN(val) || val < MIN_METERS_PER_SCREEN || val > MAX_METERS_PER_SCREEN) {
+    return null;
+  }
+  return Math.round(val * 10) / 10;
+}
+
+/** 返済後の残債(m)。0未満にはならない */
+export function remainingDebt(debt: number, paidMeters: number): number {
+  return Math.max(0, debt - paidMeters);
+}
+
 /**
  * 日ごとの記録から、日別の残債の推移を作る。[days] は日付の重複がなく、順不同でよい。
  * 記録のない日は負債が増減しないので飛ばしてかまわない。

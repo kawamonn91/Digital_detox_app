@@ -15,7 +15,8 @@ import { useAppStore } from '../store/useAppStore';
 import { deleteRun, getRecentRuns, saveRunRecord, SavedRun } from '../services/storageService';
 import { startRunForeground, stopRunForeground, updateRunForeground } from '../services/runForeground';
 import { formatDistance, formatDuration, formatPace } from '../domain/format';
-import { MAX_ACCURACY_METERS, paceMinPerKm, runCalories, segmentDistance } from '../domain/running';
+import { remainingDebt } from '../domain/debt';
+import { MAX_ACCURACY_METERS, paceMinPerKm, runCalories, segmentDistance, speedKmh } from '../domain/running';
 import { COLORS, FONTS, RADIUS } from '../theme';
 
 /** これより短いランニングは記録しない(m) */
@@ -61,9 +62,9 @@ export default function RunningScreen() {
 
   const elapsedSeconds = run.elapsed;
   const pace = paceMinPerKm(run.totalMeters, elapsedSeconds);
-  const speedKmh = elapsedSeconds > 0 ? (run.totalMeters / elapsedSeconds) * 3.6 : 0;
+  const speedKmhVal = speedKmh(run.totalMeters, elapsedSeconds);
   const calories = runCalories(run.totalMeters, settings.weightKg);
-  const remainingAfter = Math.max(0, debtMeters - run.totalMeters);
+  const remainingAfter = remainingDebt(debtMeters, run.totalMeters);
 
   const startRun = async () => {
     if (!(await requestLocationPermission())) {
@@ -170,7 +171,7 @@ export default function RunningScreen() {
       {/* ── メトリクス ── */}
       <View style={styles.metricsRow}>
         <MetricCard label="ペース" value={formatPace(pace)} unit="分/km" />
-        <MetricCard label="速度" value={speedKmh.toFixed(1)} unit="km/h" />
+        <MetricCard label="速度" value={speedKmhVal.toFixed(1)} unit="km/h" />
         <MetricCard label="カロリー" value={Math.round(calories).toString()} unit="kcal" />
       </View>
 

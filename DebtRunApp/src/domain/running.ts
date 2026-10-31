@@ -43,6 +43,26 @@ export function paceMinPerKm(meters: number, seconds: number): number {
   return seconds / 60 / (meters / 1000);
 }
 
+/** 走行速度(km/h)。秒数が0以下の場合は0 */
+export function speedKmh(meters: number, seconds: number): number {
+  if (meters <= 0 || seconds <= 0) return 0;
+  return (meters / seconds) * 3.6;
+}
+
+/** 体重入力の最小値(kg) */
+export const MIN_WEIGHT_KG = 30;
+/** 体重入力の最大値(kg) */
+export const MAX_WEIGHT_KG = 200;
+
+/** 体重(kg)の文字列または数値を検証・パースする。範囲外や無効なら null */
+export function parseWeightKg(input: string | number): number | null {
+  const val = typeof input === 'number' ? input : parseFloat(input);
+  if (Number.isNaN(val) || val < MIN_WEIGHT_KG || val > MAX_WEIGHT_KG) {
+    return null;
+  }
+  return Math.round(val * 10) / 10;
+}
+
 /**
  * 消費カロリー(kcal)の目安。ランニングは速さによらず「体重(kg) × 距離(km) × 約1.036」kcal
  * とされる(以前の実装は時速10km固定のMETで計算していた)。

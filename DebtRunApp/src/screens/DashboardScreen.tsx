@@ -12,6 +12,7 @@ import LinearGradient from 'react-native-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
 import { useAppStore } from '../store/useAppStore';
 import { scrollTracker, usageStats } from '../services/nativeModules';
+import { parseMetersPerScreen } from '../domain/debt';
 import { formatDistance, formatScreenTime } from '../domain/format';
 import { COLORS, FONTS, RADIUS } from '../theme';
 import DebtRingChart from '../components/DebtRingChart';
@@ -57,12 +58,12 @@ export default function DashboardScreen() {
   const debtIsKm = debtMeters >= 1000;
 
   const saveMps = async () => {
-    const val = parseFloat(mpsInput);
-    if (isNaN(val) || val <= 0 || val > 100) {
+    const val = parseMetersPerScreen(mpsInput);
+    if (val === null) {
       Alert.alert('無効な値', '0.1〜100 の範囲で入力してください。');
       return;
     }
-    await setSettings({ metersPerScreen: Math.round(val * 10) / 10 });
+    await setSettings({ metersPerScreen: val });
     setSettingsVisible(false);
   };
 
