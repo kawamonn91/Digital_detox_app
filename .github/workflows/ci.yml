@@ -1,0 +1,45 @@
+# PR と main への push のたびに、TypeScript の型チェックと Jest 単体テストを行う。
+# main は「build」が通らないとマージできない設定にしてあり、PR は自動マージを予約しておくと
+# ここが通った時点でマージされる（docs/ci.md を参照）。
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # 同じ PR に続けて push したら、古い実行は止める
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: DebtRunApp
+    steps:
+      # アクションは改ざんに備えてコミットの SHA で固定する（コメントは版）
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: DebtRunApp/package-lock.json
+
+      - name: 依存関係のインストール
+        run: npm ci
+
+      - name: 型チェック (TypeScript)
+        run: npx tsc --noEmit
+
+      - name: 単体テスト (Jest)
+        run: npm test -- --watchAll=false

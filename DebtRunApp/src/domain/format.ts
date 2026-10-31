@@ -33,3 +33,19 @@ export function formatScreenTime(ms: number): string {
   const m = totalMin % 60;
   return h > 0 ? `${h}時間${m}分` : `${m}分`;
 }
+
+/** 時刻を「HH:MM」形式に */
+export function formatTime(hour: number, minute: number): string {
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+/** 時刻文字列(HH:MM)を検証・パースする。無効なら null */
+export function parseTime(timeStr: string): { hour: number; minute: number } | null {
+  const parts = timeStr.trim().split(':');
+  if (parts.length !== 2) return null;
+  const h = Number(parts[0]);
+  const m = Number(parts[1]);
+  if (Number.isNaN(h) || Number.isNaN(m) || !Number.isInteger(h) || !Number.isInteger(m)) return null;
+  if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+  return { hour: h, minute: m };
+}

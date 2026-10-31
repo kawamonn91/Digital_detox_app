@@ -83,8 +83,8 @@ android {
         applicationId "com.ttech.debtrun"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 2
-        versionName "1.0.1"
+        versionCode 3
+        versionName "1.0.2"
     }
     // リリース署名。keystore.properties(gitignore対象)が無い環境ではデバッグ署名のままビルドが通る。
     def releaseProps = new Properties()
