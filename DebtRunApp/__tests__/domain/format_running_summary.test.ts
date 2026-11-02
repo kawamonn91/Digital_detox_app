@@ -40,6 +40,17 @@ describe('format', () => {
     expect(parseTime('invalid')).toBeNull();
     expect(parseTime('12')).toBeNull();
   });
+
+  test('時・分のどちらかが空や数字以外なら無効', () => {
+    expect(parseTime(':')).toBeNull();
+    expect(parseTime('21:')).toBeNull();
+    expect(parseTime(':30')).toBeNull();
+    expect(parseTime('1e1:00')).toBeNull();
+    expect(parseTime('-1:00')).toBeNull();
+    expect(parseTime('12:5.5')).toBeNull();
+    expect(parseTime('9:5')).toEqual({ hour: 9, minute: 5 });
+    expect(parseTime(' 21:00 ')).toEqual({ hour: 21, minute: 0 });
+  });
 });
 
 describe('running', () => {
